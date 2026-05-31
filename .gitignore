@@ -18,26 +18,31 @@ build/
 venv/
 env/
 
+# Conda 环境 (不属于项目文件)
+.conda/
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Node
+# Node (前端)
 node_modules/
 .next/
 
 # CodeGraph 索引
 .codegraph/
 
-# SQLite 数据库文件
-*.db
-*.sqlite3
+# PostgreSQL 数据目录 (Docker volume)
+postgres_data/
 
-# 向量数据库本地数据
+# Qdrant 数据目录 (Docker volume)
+qdrant_data/
+qdrant_storage/
+
+# 向量数据库本地数据 (非 Docker 运行时)
 vector_db/
-chroma_data/
 
 # 测试
 .pytest_cache/
@@ -49,3 +54,7 @@ htmlcov/
 
 # Docker
 .docker/
+
+# 临时文件
+*.tmp
+*.bak

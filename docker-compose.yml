@@ -3,35 +3,90 @@
 # Docker 容器编排配置
 # 启动方式: docker-compose up -d
 #
-# Docker 让应用在隔离的容器中运行，避免"我电脑上能跑"的问题。
-# docker-compose 可以一次性启动多个关联的服务。
+# 包含三个服务:
+# - api: FastAPI 后端
+# - postgres: PostgreSQL 数据库 (关系数据)
+# - qdrant: Qdrant 向量数据库 (RAG 检索)
+#
+# 数据持久化: 使用 Docker volumes，容器删除后数据不丢失
 
 version: "3.9"
 
 services:
-  # ---- FastAPI 后端 ----
+  # ============================================================
+  # FastAPI 后端服务
+  # ============================================================
   api:
     build: .
     container_name: hireflow-api
     ports:
       # 将容器的 8000 端口映射到宿主机的 8000 端口
-      # 这样访问 http://localhost:8000 就能连到容器内的 API
       - "8000:8000"
     environment:
-      # 环境变量，在容器内可读取
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - DATABASE_URL=sqlite:///./data/hireflow.db
+      # LLM 配置 (通过环境变量覆盖 .env 中的默认值)
+      - LLM_MODE=${LLM_MODE:-local}
+      - LLM_CLOUD_API_KEY=${LLM_CLOUD_API_KEY:-}
+      # Embedding 配置
+      - EMBEDDING_MODE=${EMBEDDING_MODE:-local}
+      # 数据库连接 (在 Docker 网络中，服务名就是 hostname)
+      - DB_URL=postgresql://hireflow:hireflow@postgres:5432/hireflow
+      # Qdrant 连接
+      - QDRANT_URL=http://qdrant:6333
     volumes:
-      # 将宿主机的 ./data 目录挂载到容器内的 /app/data 目录
-      # 这样即使容器删除，数据也不会丢失
-      - ./data:/app/data
+      # 挂载本地代码目录，修改代码后不需要重建镜像
+      - .:/app
+    depends_on:
+      # 等 PostgreSQL 和 Qdrant 先启动
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     restart: unless-stopped
 
-  # ---- 向量数据库 (可选，Chroma 可以内嵌在 Python 中) ----
-  # chroma:
-  #   image: chromadb/chroma:latest
-  #   container_name: hireflow-chroma
-  #   ports:
-  #     - "8001:8000"
-  #   volumes:
-  #     - ./chroma_data:/chroma/chroma
+  # ============================================================
+  # PostgreSQL 数据库服务
+  # ============================================================
+  postgres:
+    image: pgvector/pgvector:pg16  # 使用带 pgvector 扩展的镜像 (未来可能需要)
+    container_name: hireflow-postgres
+    environment:
+      # 数据库名、用户名、密码
+      POSTGRES_DB: hireflow
+      POSTGRES_USER: hireflow
+      POSTGRES_PASSWORD: hireflow
+    ports:
+      # 将容器的 5432 端口映射到宿主机
+      - "5432:5432"
+    volumes:
+      # 数据持久化: 即使容器被删除，数据也保留在宿主机上
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # 健康检查: 每 5 秒检查一次 PostgreSQL 是否就绪
+      test: ["CMD-SHELL", "pg_isready -U hireflow -d hireflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # Qdrant 向量数据库服务
+  # ============================================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: hireflow-qdrant
+    ports:
+      # REST API 端口 (客户端连接用)
+      - "6333:6333"
+      # gRPC 端口 (高性能通信，可选)
+      - "6334:6334"
+    volumes:
+      # 向量数据持久化
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+# ============================================================
+# 命名卷 (Docker 自动管理，数据持久化)
+# ============================================================
+volumes:
+  postgres_data:
+  qdrant_data:

@@ -6,13 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HireFlow is a LangGraph-based multi-agent recruitment screening and interview assistant system. It models the full recruitment pipeline — JD analysis, resume parsing, candidate matching, ranking, interview question generation, interview evaluation, and HR email drafting — as a controlled multi-agent workflow with human-in-the-loop checkpoints.
 
-## Tech Stack (Planned)
+## Tech Stack (Finalized 2026-05-31)
 
-- **Backend**: Python, FastAPI, LangGraph, LangChain, Pydantic
-- **Frontend**: React / Next.js, Tailwind CSS
-- **Vector DB**: Qdrant, Chroma, or FAISS
-- **Database**: SQLite (MVP) → PostgreSQL
-- **Infrastructure**: Docker, docker-compose
+- **Backend**: Python 3.11, FastAPI, LangGraph, LangChain, Pydantic
+- **LLM**: DeepSeek API (cloud) + LM Studio (local) — dual mode, OpenAI-compatible
+- **Embedding**: DeepSeek (cloud) + LM Studio (local) — same dual-mode design
+- **Structured Output**: LangChain `with_structured_output()` + Pydantic
+- **Frontend**: Next.js, Tailwind CSS
+- **Vector DB**: Qdrant
+- **Database**: PostgreSQL (with pgvector for future hybrid search)
+- **LangGraph Persistence**: PostgresSaver
+- **Config**: Pydantic Settings
+- **PDF Parsing**: LangChain Document Loaders (PyMuPDF backend) + RecursiveCharacterTextSplitter
+- **Infrastructure**: Docker Compose (API + PostgreSQL + Qdrant)
 
 ## Architecture
 
@@ -99,18 +105,23 @@ conda activate hireflowagents
 # 安装项目依赖
 pip install -r requirements.txt
 
+# 启动依赖服务 (PostgreSQL + Qdrant)
+docker-compose up -d postgres qdrant
+
 # Backend (Python/FastAPI)
-uvicorn app.main:app --reload          # Start API server
-pytest                                  # Run all tests
-pytest tests/test_match_agent.py -v     # Run a single test file
-pytest -k "test_ranking" -v             # Run tests matching a pattern
+uvicorn app.main:app --reload          # 启动 API 服务器 (开发模式)
 
-# Frontend (React/Next.js)
-cd frontend && npm install
-npm run dev                             # Start dev server
+# 测试
+pytest                                  # 运行所有测试
+pytest tests/test_match_agent.py -v     # 运行单个测试文件
 
-# Docker
-docker-compose up -d                    # Start all services (API, DB, vector store)
+# Docker 一键启动所有服务
+docker-compose up -d                    # API + PostgreSQL + Qdrant
+docker-compose down                     # 停止所有服务
+
+# 环境变量
+cp .env.example .env                    # 创建本地配置文件
+# 编辑 .env 设置 LLM_MODE=local 或 LLM_MODE=cloud
 ```
 
 ## Evaluation Framework

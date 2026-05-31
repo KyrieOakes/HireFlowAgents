@@ -1437,3 +1437,28 @@ HireFlow 是一个比较适合校招简历的项目，因为它结合了 LLM 应
 3. 完整的评估框架
 
 如果这三部分实现得比较扎实，这个项目就可以作为一个比较有竞争力的校招简历项目。
+
+---
+
+## 26. 技术栈最终选型 (2026-05-31 更新)
+
+以下为 MVP Phase 1 确认的技术栈，替代本文档前 25 节中的初步建议。
+
+| 层级 | 选型 | 备注 |
+|---|---|---|
+| 关系型数据库 | **PostgreSQL** | 替代原 SQLite 规划 |
+| 向量数据库 | **Qdrant** | 替代原 Chroma 规划 |
+| LLM Provider | **DeepSeek API (云端) + LM Studio (本地)** | 双模式, OpenAI 兼容接口一键切换 |
+| Embedding | **DeepSeek (云端) + LM Studio (本地)** | 与 LLM 同步切换 |
+| 结构化输出 | **LangChain with_structured_output** | 与 Pydantic 深度集成 |
+| PDF 解析 | **LangChain Document Loaders** | 统一接口 |
+| DOCX 解析 | **python-docx** | 不变 |
+| 文本切分 | **RecursiveCharacterTextSplitter** | 后续升级语义切分 |
+| LangGraph 持久化 | **PostgresSaver** | 支持中断恢复和 Human-in-the-loop |
+| 配置管理 | **Pydantic Settings** | 类型安全 + 自动验证 |
+| 前端 | **Next.js + Tailwind CSS** | 不变 |
+| 部署 | **Docker Compose** (API + PostgreSQL + Qdrant) | 多服务编排 |
+
+详见:
+- `logs/技术栈选择原因.md` — 每个选型的"为什么选这个而不选那个"
+- `logs/MVPs/MVP-Phase1-计划.md` — MVP 阶段详细计划
