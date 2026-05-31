@@ -1,0 +1,37 @@
+# docker-compose.yml
+# ===================
+# Docker 容器编排配置
+# 启动方式: docker-compose up -d
+#
+# Docker 让应用在隔离的容器中运行，避免"我电脑上能跑"的问题。
+# docker-compose 可以一次性启动多个关联的服务。
+
+version: "3.9"
+
+services:
+  # ---- FastAPI 后端 ----
+  api:
+    build: .
+    container_name: hireflow-api
+    ports:
+      # 将容器的 8000 端口映射到宿主机的 8000 端口
+      # 这样访问 http://localhost:8000 就能连到容器内的 API
+      - "8000:8000"
+    environment:
+      # 环境变量，在容器内可读取
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=sqlite:///./data/hireflow.db
+    volumes:
+      # 将宿主机的 ./data 目录挂载到容器内的 /app/data 目录
+      # 这样即使容器删除，数据也不会丢失
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # ---- 向量数据库 (可选，Chroma 可以内嵌在 Python 中) ----
+  # chroma:
+  #   image: chromadb/chroma:latest
+  #   container_name: hireflow-chroma
+  #   ports:
+  #     - "8001:8000"
+  #   volumes:
+  #     - ./chroma_data:/chroma/chroma
