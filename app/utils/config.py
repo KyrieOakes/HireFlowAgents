@@ -72,7 +72,7 @@ class EmbeddingSettings(BaseSettings):
 
     # 云端
     cloud_base_url: str = "https://api.deepseek.com/v1"
-    cloud_api_key: str = "sk-595f9fce6d5245cfa00168b760217d40"
+    cloud_api_key: str = ""  # 从 .env 或环境变量读取
     cloud_model: str = "deepseek-embedding"
 
     # 向量维度: qwen3-embedding = 2560, DeepSeek = 1536
