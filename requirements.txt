@@ -38,3 +38,7 @@ psycopg2-binary>=2.9              # PostgreSQL 驱动
 
 # --- 工具 ---
 python-dotenv>=1.0                # .env 文件加载
+
+# --- 评估与开发 ---
+jupyter>=1.0                      # Jupyter Notebook (评估报告)
+pytz>=2024.1                      # 时区支持 (评估报告时间戳)
