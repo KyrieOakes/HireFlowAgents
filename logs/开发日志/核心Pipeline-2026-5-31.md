@@ -6,71 +6,72 @@
 
 ## 系统流程图
 
-```mermaid
-flowchart TB
-    subgraph 用户入口
-        CLI[CLI: python -m app.cli demo]
-        API[FastAPI: uvicorn app.main:app]
-    end
+```
+                          ┌─ 用户入口 ─┐
+                          │  CLI demo   │
+                          │  API 服务   │
+                          └──────┬──────┘
+                                 │
+          ┌──────────────────────┼──────────────────────┐
+          ▼                      ▼                      ▼
+   POST /jobs/upload     POST /resumes/upload    POST /jobs/{id}/match
+    → /jobs/{id}/parse    → /resumes/{id}/parse   → GET /jobs/{id}/ranking
+          │                      │                      │
+          ▼                      ▼                      │
+   ┌──────────────┐   ┌──────────────────┐             │
+   │   JD Agent   │   │  Resume Agent    │             │
+   │  analyze_jd  │   │  parse_resume    │             │
+   │      ↓       │   │       ↓          │             │
+   │ JobDescrip.. │   │  CandidateProfile│             │
+   │   + Rubric   │   │  (+ nested edu/  │             │
+   └──────┬───────┘   │   project/exp)   │             │
+          │           └────────┬─────────┘             │
+          │                    │                        │
+          │           ┌────────▼─────────┐             │
+          │           │  RAG 证据检索     │             │
+          │           │  rag_service.py  │             │
+          │           │  加载→切分→Emb.. │             │
+          │           │  →Qdrant→检索    │             │
+          │           └────────┬─────────┘             │
+          │                    │                        │
+          └────────────┬───────┘                        │
+                       ▼                                ▼
+              ┌─────────────────┐            ┌──────────────────┐
+              │   Match Agent   │            │  Ranking Agent   │
+              │  match_candidate│            │ rank_candidates  │
+              │       ↓         │            │       ↓          │
+              │  7维度评分(100) │            │  排序 + Shortlist│
+              │  技术30 项目20  │            │  + LLM排序解释   │
+              │  经验15 教育10  │            └────────┬─────────┘
+              │  领域10 沟通5   │                     │
+              │  风险-10        │                     ▼
+              └────────┬────────┘            ┌──────────────────┐
+                       │                     │  Human Review    │
+                       │                     │  人工审核         │
+                       └──────────┬──────────┘
+                                  ▼
+                         ┌─────────────────┐
+                         │   结果展示       │
+                         │  排序表 + 统计   │
+                         └─────────────────┘
 
-    subgraph API路由层
-        R1["POST /jobs/upload → /jobs/{id}/parse"]
-        R2["POST /resumes/upload → /resumes/{id}/parse"]
-        R3["POST /jobs/{id}/match → GET /jobs/{id}/ranking"]
-    end
-
-    subgraph Agent业务层
-        A1["JD Agent<br/>analyze_jd()<br/>→ JobDescription + Rubric"]
-        A2["Resume Agent<br/>parse_resume()<br/>→ CandidateProfile"]
-        A3["Match Agent<br/>match_candidate()<br/>→ 7维度评分"]
-        A4["Ranking Agent<br/>rank_candidates()<br/>→ 排序 + Shortlist"]
-    end
-
-    subgraph LangGraph工作流
-        G1[jd_agent_node] --> G2[resume_agent_node]
-        G2 --> G3[resume_validation_node]
-        G3 --> G4[evidence_retrieval_node]
-        G4 --> G5[match_agent_node]
-        G5 --> G6[ranking_agent_node]
-        G6 --> G7[human_review_node]
-        G3 -->|失败| G8[error_handler_node]
-    end
-
-    subgraph 服务层
-        S1[llm_service.py<br/>local: json_schema<br/>cloud: function_calling]
-        S2[rag_service.py<br/>加载→切分→Embedding→Qdrant]
-        S3[document_loader.py<br/>PyMuPDF + RecursiveTextSplitter]
-        S4[embedding_service.py<br/>OpenAI SDK直接调用]
-        S5[vector_store.py<br/>Qdrant客户端]
-    end
-
-    subgraph 数据层
-        D1[(PostgreSQL<br/>7张ORM表)]
-        D2[(Qdrant<br/>resume_chunks集合)]
-    end
-
-    subgraph LLM后端
-        L1[LM Studio<br/>hermes-3-llama-3.1-8b]
-        L2[DeepSeek API<br/>deepseek-v4-pro]
-    end
-
-    CLI --> A1 & A2 & A3 & A4
-    API --> R1 & R2 & R3
-    R1 --> A1
-    R2 --> A2
-    R3 --> A3 --> A4
-
-    A1 & A2 & A3 --> S1
-    A2 --> S2 --> S3 & S4 & S5
-    S5 --> D2
-    S1 --> L1 & L2
-    A3 & A4 --> D1
-
-    G1 --- A1
-    G2 --- A2
-    G4 --- S2
-    G5 --- A3
-    G6 --- A4
+  ═══════════════════════════════════════════════════════════
+  数据层                         LLM 后端
+  ┌────────────┬────────────┐   ┌─────────────────────────┐
+  │ PostgreSQL │   Qdrant   │   │ LM Studio (本地)         │
+  │ 关系数据    │  向量检索   │   │ hermes-3-llama-3.1-8b   │
+  │ 7张ORM表   │  resume_   │   │ localhost:1234           │
+  │            │  chunks    │   │                          │
+  └────────────┴────────────┘   │ DeepSeek API (云端)      │
+                                │ deepseek-v4-pro          │
+  服务层                         │ api.deepseek.com/v1      │
+  llm_service.py                └─────────────────────────┘
+    local → json_schema
+    cloud → function_calling
+  embedding_service.py → OpenAI SDK
+  vector_store.py → QdrantClient
+  document_loader.py → PyMuPDF + RecursiveTextSplitter
+  rag_service.py → 加载→切分→Embedding→Qdrant→检索
 ```
 
 ## 详细改动列表

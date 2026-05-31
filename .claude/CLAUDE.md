@@ -188,11 +188,18 @@ api_key = os.getenv("OPENAI_API_KEY", "sk-default-key")
 **要求:**
 - 内容使用中文
 - 记录距离上次 dev log 以来的所有改动
-- **必须包含当前系统的流程图** (使用 Mermaid 语法), 展示各模块及其关系
-- **必须包含当前系统的流程图** (使用 Mermaid 语法), 展示各模块及其关系
+- **必须包含当前系统的流程图**，使用代码块格式 (```)，不要用 Mermaid 或 box-drawing 字符
+  - 用纯文本箭头 `-->` 和竖线 `|` 画流程
+  - 示例格式:
+    ```
+    用户输入 --> JD Agent --> Resume Agent --> Match Agent --> Ranking Agent --> 结果展示
+                     │            │               │
+                     ▼            ▼               ▼
+                  PostgreSQL   Qdrant(向量)    RAG证据检索
+    ```
 - 日志结构:
   1. 本次改动概述
-  2. 系统流程图 (Mermaid)
+  2. 系统流程图 (代码块纯文本格式)
   3. 详细改动列表 (文件 + 说明)
   4. 下一步计划
 
