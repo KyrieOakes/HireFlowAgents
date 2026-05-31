@@ -41,4 +41,5 @@ python-dotenv>=1.0                # .env 文件加载
 
 # --- 评估与开发 ---
 jupyter>=1.0                      # Jupyter Notebook (评估报告)
+ipykernel>=6.0                    # Jupyter Kernel (conda 环境注册)
 pytz>=2024.1                      # 时区支持 (评估报告时间戳)
