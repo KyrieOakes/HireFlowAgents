@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-05-31T16:33:49.089289+10:00",
+  "pipeline": {
+    "steps": [
+      {
+        "step": "JD 解析",
+        "time": 2.96
+      },
+      {
+        "step": "简历解析",
+        "time": 19.75
+      },
+      {
+        "step": "匹配评分",
+        "time": 22.58
+      },
+      {
+        "step": "排序",
+        "time": 2.01
+      }
+    ],
+    "total_time": 47.29
+  },
+  "ranking": [
+    "E001",
+    "E003",
+    "E002"
+  ],
+  "scores": [
+    {
+      "id": "E001",
+      "score": 85.0,
+      "rec": "Strong Match"
+    },
+    {
+      "id": "E003",
+      "score": 85.0,
+      "rec": "Strong Match"
+    },
+    {
+      "id": "E002",
+      "score": 74.0,
+      "rec": "Medium Match"
+    }
+  ],
+  "metrics": {
+    "precision_at_1": 1.0,
+    "precision_at_2": 1.0,
+    "precision_at_3": 1.0,
+    "ndcg_at_3": 1.0,
+    "spearman_rho": 1.0,
+    "score_max": 85.0,
+    "score_min": 74.0,
+    "score_mean": 81.3,
+    "score_range": 11.0
+  },
+  "proxy_relevance": {
+    "E001": 1.0,
+    "E002": 0.6,
+    "E003": 1.0
+  }
+}
