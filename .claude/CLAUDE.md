@@ -89,11 +89,17 @@ hireflow/
 
 ## Development Commands
 
-Since the project is in the planning phase, these are the expected commands based on the tech stack:
+本项目使用 conda 虚拟环境 `hireflowagents` (Python 3.11)。
+每次开发前必须先激活此环境。
 
 ```bash
-# Backend (Python/FastAPI)
+# 激活 conda 环境 (每次开发前必须执行)
+conda activate hireflowagents
+
+# 安装项目依赖
 pip install -r requirements.txt
+
+# Backend (Python/FastAPI)
 uvicorn app.main:app --reload          # Start API server
 pytest                                  # Run all tests
 pytest tests/test_match_agent.py -v     # Run a single test file

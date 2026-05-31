@@ -1,7 +1,51 @@
+# macOS
 .DS_Store
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 环境变量 (含 API Key, 绝对不能提交)
 .env
+
+# 虚拟环境
 .venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node
 node_modules/
+.next/
+
+# CodeGraph 索引
 .codegraph/
+
+# SQLite 数据库文件
+*.db
+*.sqlite3
+
+# 向量数据库本地数据
+vector_db/
+chroma_data/
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 日志
+*.log
+
+# Docker
+.docker/
