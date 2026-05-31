@@ -58,9 +58,12 @@ class LLMSettings(BaseSettings):
     # 输出温度 (0=确定性, 1=创造性, 招聘场景建议低温度保证稳定性)
     temperature: float = 0.1
 
+    # 最大输出 token 数
+    # qwen3-8b-mlx 是 thinking 模型，内部推理消耗大量 token
+    # 本地模型建议 4096，给推理留空间；云端 2048 够用
+    max_tokens: int = 4096
+
     class Config:
-        # env_prefix = "LLM_" 会让所有环境变量加 LLM_ 前缀
-        # 例如: LLM_MODE, LLM_LOCAL_BASE_URL
         env_prefix = "LLM_"
 
 
@@ -84,6 +87,11 @@ class EmbeddingSettings(BaseSettings):
     cloud_base_url: str = "https://api.deepseek.com"
     cloud_api_key: str = ""
     cloud_model: str = "deepseek-embedding"
+
+    # 向量维度 (取决于模型，不同模型维度不同)
+    # text-embedding-qwen3-embedding-4b: 2560
+    # DeepSeek embedding: 1536
+    dimension: int = 2560
 
     class Config:
         env_prefix = "EMBEDDING_"

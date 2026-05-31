@@ -46,7 +46,7 @@ def _get_qdrant_client() -> QdrantClient:
 
 def init_collection(
     collection_name: str,
-    vector_size: int = 1536,
+    vector_size: int = 2560,  # qwen3-embedding-4b 维度 = 2560
 ) -> QdrantVectorStore:
     """
     初始化 Qdrant 集合 (Collection)。
@@ -56,7 +56,7 @@ def init_collection(
 
     参数:
         collection_name: 集合名称，如 "resumes" 或 "job_descriptions"
-        vector_size: 向量维度 (DeepSeek embedding 是 1536)
+        vector_size: 向量维度 (text-embedding-qwen3-embedding-4b = 2560)
     返回:
         QdrantVectorStore: LangChain 封装的上层检索接口
     """
