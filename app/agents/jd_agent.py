@@ -3,67 +3,118 @@ app/agents/jd_agent.py
 =======================
 JD Agent: 岗位描述分析 Agent。
 
-职责: 从原始岗位描述文本中提取结构化信息。
-这是招聘流程的第一个 Agent，它的输出是整个流程的基准。
+职责: 读取原始岗位描述文本，调用 LLM 提取结构化信息。
+这是整个招聘流程的起点，输出作为后续匹配的基准。
 
-输入: 原始岗位描述文本 (state.jd_text)
-输出: 结构化岗位信息 JSON (state.jd_profile)
+输入: 原始岗位描述文本 (字符串)
+输出: JobDescription Pydantic 对象 + ScoringRubric 字典
 """
 
 from typing import Dict, Any
+from app.services.llm_service import call_llm_structured, call_llm
+from app.schemas.jd_schema import JobDescription
+from app.utils.config import settings
 
 
-async def analyze_jd(jd_text: str, llm_service) -> Dict[str, Any]:
+async def analyze_jd(jd_text: str) -> Dict[str, Any]:
     """
-    分析岗位描述文本，提取结构化岗位需求。
+    分析岗位描述，提取结构化信息 + 生成评分 Rubric。
 
-    这个函数做的事:
-    1. 读取非结构化的岗位描述原始文本
-    2. 调用 LLM 提取关键信息 (岗位名、技能、职责等)
-    3. 生成评分 Rubric (各维度的权重)
-    4. 用 Pydantic schema 验证输出格式
+    分两步:
+    第1步: 调用 LLM 提取结构化 JD 信息 (JobDescription)
+    第2步: 基于提取结果，生成评分 Rubric (各维度权重)
 
     参数:
         jd_text: 用户上传的原始岗位描述全文
-        llm_service: LLM 调用服务 (依赖注入，方便测试时替换)
     返回:
-        dict: 符合 jd_schema.JobDescription 格式的结构化数据
+        dict: {
+            "job_title": str,
+            "required_skills": [str],
+            "preferred_skills": [str],
+            "responsibilities": [str],
+            "education_requirements": [str],
+            "experience_requirements": str,
+            "technical_requirements": [str],
+            "soft_skills": [str],
+            "company": str | None,
+            "location": str | None,
+        }
     """
-    # TODO: 实现 JD 分析逻辑
-    # 1. 构造 system prompt，告诉 LLM 它是招聘专家
-    # 2. 把 jd_text 作为 user message 传给 LLM
-    # 3. 使用 call_llm_structured() 约束输出为 JobDescription schema
-    # 4. 如果 LLM 返回格式错误，重试 (最多 3 次)
-    # 5. 返回验证后的字典
+    # ================================================================
+    # 第1步: 提取结构化 JD 信息
+    # ================================================================
+    # 构造系统提示词: 告诉 LLM 它的角色和任务
+    system_prompt = """你是一位资深的招聘专家和技术面试官，拥有10年以上的招聘经验。
+你的任务是从岗位描述(JD)中提取结构化的信息。
 
-    # 示例 system prompt:
-    # system_prompt = """
-    # 你是一位资深的招聘专家和技术面试官。
-    # 你的任务是从岗位描述(JD)中提取结构化的信息。
-    # 请仔细阅读 JD 并提取:
-    # - 岗位名称
-    # - 必备技能: 候选人必须掌握的技能
-    # - 加分技能: 候选人掌握会更好但不是必须的技能
-    # ...
-    # """
-    pass
+提取规则:
+1. 必备技能(required_skills): 岗位明确要求的、候选人必须掌握的技术技能，如编程语言、框架、工具等
+2. 加分技能(preferred_skills): 岗位中提到的"优先"、"加分"、"nice to have"的技能
+3. 岗位职责(responsibilities): 入职后需要承担的主要工作内容，每条用简洁的短语描述
+4. 学历要求(education_requirements): 明确的学历和专业要求
+5. 经验要求(experience_requirements): 工作年限要求，如"0-2年"、"3-5年"
+6. 技术要求(technical_requirements): 岗位涉及的具体技术栈，如框架、数据库、工具等
+7. 软技能(soft_skills): 沟通能力、团队协作等非技术性要求
+
+注意:
+- 如果某项信息在JD中没有明确提及，用空列表[]表示
+- 不要编造JD中没有的信息
+- 保持原始JD的用词，不要过度概括"""
+
+    # 调用 LLM 进行结构化提取
+    # 传入 JobDescription Pydantic 类，LLM 会按这个格式输出
+    jd_profile = call_llm_structured(
+        system_prompt=system_prompt,
+        user_message=f"请分析以下岗位描述:\n\n{jd_text}",
+        output_schema=JobDescription,
+    )
+
+    # 将 Pydantic 对象转为字典 (方便后续 JSON 序列化和存储)
+    jd_dict = jd_profile.model_dump()
+
+    # ================================================================
+    # 第2步: 生成评分 Rubric
+    # ================================================================
+    rubric = _generate_rubric(jd_dict)
+
+    # 将 rubric 附加到 jd_dict 中一起返回
+    jd_dict["rubric"] = rubric
+
+    return jd_dict
 
 
-def build_rubric(jd_profile: Dict[str, Any]) -> Dict[str, Any]:
+def _generate_rubric(jd_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
-    根据岗位需求构建评分 Rubric。
+    根据岗位需求生成评分 Rubric (各维度权重)。
 
-    评分 Rubric 定义了 Match Agent 评分的各维度权重。
-    不同岗位可能侧重不同的维度 (如技术岗重技能，管理岗重经验)。
+    默认权重分配:
+    - 技术技能匹配: 30 分 (最重要的维度，因为大多数岗位都看重技术)
+    - 项目相关性: 20 分
+    - 工作经验: 15 分
+    - 教育背景: 10 分
+    - 领域相关性: 10 分
+    - 沟通表达: 5 分
+    - 风险扣分: -10 分 (额外扣分项)
+
+    后续可以根据岗位类型动态调整:
+    - 技术岗: 技术技能权重更高
+    - 管理岗: 经验+沟通权重更高
 
     参数:
-        jd_profile: JD Agent 解析出的结构化岗位信息
+        jd_dict: 结构化 JD 信息
     返回:
-        dict: 评分 Rubric，格式见 jd_schema.ScoringRubric
+        dict: 评分 Rubric
     """
-    # TODO: 实现 Rubric 构建
-    # 1. 根据岗位类型调整权重
-    #    例如: 技术岗 -> technical_skills 权重提高
-    #          管理岗 -> experience 权重提高
-    # 2. 确保所有权重之和 = 100
-    pass
+    # 当前使用固定权重 (MVP 阶段)
+    # 后续 Phase 会升级为 LLM 动态权重
+    rubric = {
+        "technical_skills": {"max_score": 30, "weight": 0.30},
+        "project_relevance": {"max_score": 20, "weight": 0.20},
+        "experience": {"max_score": 15, "weight": 0.15},
+        "education": {"max_score": 10, "weight": 0.10},
+        "domain_relevance": {"max_score": 10, "weight": 0.10},
+        "communication": {"max_score": 5, "weight": 0.05},
+        "risk_penalty": {"max_score": -10, "weight": -0.10},
+        "total": 100,
+    }
+    return rubric

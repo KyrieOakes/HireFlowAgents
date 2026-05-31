@@ -142,6 +142,10 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        # extra="ignore": 忽略环境变量中不属于 Settings 顶层字段的值
+        # 因为 DB_URL, DOC_CHUNK_SIZE 等属于嵌套的子 Settings，
+        # 它们通过各自的 env_prefix 来匹配，不需要在顶层再定义一次
+        extra = "ignore"
 
 
 settings = Settings()
