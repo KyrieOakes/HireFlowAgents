@@ -44,7 +44,8 @@ class LLMSettings(BaseSettings):
     # LM Studio 不需要真实的 API Key，填任意字符串即可
     local_api_key: str = "lm-studio"
     # 本地加载的模型名称，需和 LM Studio 中一致
-    local_model: str = "local-model"
+    # 当前使用: qwen3-8b-mlx (8.72 GB, Apple MLX 加速)
+    local_model: str = "qwen3-8b-mlx"
 
     # --- 云端 DeepSeek 配置 ---
     # DeepSeek 是国内性价比最高的 LLM API，中文能力强
@@ -76,7 +77,8 @@ class EmbeddingSettings(BaseSettings):
     # 本地
     local_base_url: str = "http://localhost:1234/v1"
     local_api_key: str = "lm-studio"
-    local_model: str = "local-embedding"
+    # 当前使用: text-embedding-qwen3-embedding-4b (2.50 GB)
+    local_model: str = "text-embedding-qwen3-embedding-4b"
 
     # 云端
     cloud_base_url: str = "https://api.deepseek.com"
