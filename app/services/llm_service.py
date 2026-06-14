@@ -49,9 +49,9 @@ def _get_llm() -> ChatOpenAI:
         max_tokens=llm_config.max_tokens,
     )
 
-    # DeepSeek thinking 参数: 通过 extra_body 传递
-    # flash 模型默认关闭 thinking, pro 模型需要显式关闭
-    if llm_config.mode == "cloud" and "pro" in model.lower():
+    # DeepSeek: 所有模型在 function_calling 时都需要关闭 thinking
+    # 通过 OpenAI SDK 的 extra_body 参数传递给 API
+    if llm_config.mode == "cloud":
         kwargs["model_kwargs"] = {
             "extra_body": {"thinking": {"type": "disabled"}}
         }
