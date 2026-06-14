@@ -14,6 +14,12 @@ app/utils/config.py
 
 from pydantic_settings import BaseSettings
 from typing import Literal
+from dotenv import load_dotenv
+import os
+
+# 手动加载 .env 文件到 os.environ
+# Pydantic Settings 嵌套模型读 .env 有时不稳定, 用 dotenv 确保加载
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"))
 
 
 # ============================================================
