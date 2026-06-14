@@ -2,7 +2,7 @@
 // 岗位管理页 — 创建 JD / 解析 / 查看结构化结果
 // ================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import type { Job, JDProfile, Rubric } from "@/types";
 import {
   listJobs,
@@ -26,6 +26,8 @@ export default function JobsPage() {
   const [creating, setCreating] = useState(false);
   const [parsing, setParsing] = useState<Record<string, boolean>>({});
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  // useRef 同步锁: 防止快速双击触发重复 API 调用
+  const parsingLock = useRef<Set<string>>(new Set());
 
   // 加载岗位列表
   useEffect(() => { loadJobs(); }, []);
@@ -59,8 +61,12 @@ export default function JobsPage() {
     }
   }
 
-  // 解析岗位
+  // 解析岗位 (防抖锁: 避免快速双击)
   async function handleParse(jobId: string) {
+    // 检查防抖锁: 如果该 jobId 正在解析中, 直接忽略
+    if (parsingLock.current.has(jobId)) return;
+    // 加锁
+    parsingLock.current.add(jobId);
     setParsing((prev) => ({ ...prev, [jobId]: true }));
     setError(null);
     try {
@@ -69,6 +75,8 @@ export default function JobsPage() {
     } catch (e: any) {
       setError(e.message);
     } finally {
+      // 解锁
+      parsingLock.current.delete(jobId);
       setParsing((prev) => ({ ...prev, [jobId]: false }));
     }
   }

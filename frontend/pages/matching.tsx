@@ -2,7 +2,7 @@
 // 匹配排名页 — 选择岗位 → 触发匹配 → 展示排名 + 详情
 // ================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import type { Job, RankedCandidate, MatchDetail } from "@/types";
 import { listJobs, runMatching, getRanking, getMatchDetail } from "@/services/api";
 import LoadingButton from "@/components/LoadingButton";
@@ -17,6 +17,8 @@ export default function MatchingPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string>("");
   const [matching, setMatching] = useState(false);
+  const matchLock = useRef(false);        // 匹配防抖锁
+  const detailLock = useRef<Set<string>>(new Set()); // 详情防抖锁
   const [ranked, setRanked] = useState<RankedCandidate[]>([]);
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [detailId, setDetailId] = useState<string>("");
@@ -35,27 +37,29 @@ export default function MatchingPage() {
     })();
   }, []);
 
-  // 执行匹配
+  // 执行匹配 (防抖锁)
   async function handleMatch() {
-    if (!selectedJobId) return;
+    if (!selectedJobId || matchLock.current) return;
+    matchLock.current = true;
     setMatching(true);
     setError(null);
     setRanked([]);
     try {
       const res = await runMatching(selectedJobId);
-      // runMatching 返回 match_results, 需要再调 ranking 获取正式排名
       const rankRes = await getRanking(selectedJobId);
       setRanked(rankRes.ranked_candidates);
     } catch (e: any) {
       setError(e.message);
     } finally {
+      matchLock.current = false;
       setMatching(false);
     }
   }
 
-  // 查看候选人详情
+  // 查看候选人详情 (防抖锁)
   async function handleDetail(candidateId: string) {
-    if (!selectedJobId) return;
+    if (!selectedJobId || detailLock.current.has(candidateId)) return;
+    detailLock.current.add(candidateId);
     setDetailLoading(true);
     setDetailId(candidateId);
     setError(null);
@@ -64,6 +68,7 @@ export default function MatchingPage() {
     } catch (e: any) {
       setError(e.message);
     } finally {
+      detailLock.current.delete(candidateId);
       setDetailLoading(false);
     }
   }

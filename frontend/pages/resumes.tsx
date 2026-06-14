@@ -25,6 +25,7 @@ export default function ResumesPage() {
   const [creating, setCreating] = useState(false);
   const [parsing, setParsing] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Candidate | null>(null);
+  const parsingLock = useRef<Set<string>>(new Set()); // 防抖锁
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { loadCandidates(); }, []);
@@ -52,15 +53,20 @@ export default function ResumesPage() {
     finally { setCreating(false); }
   }
 
-  // 解析简历
+  // 解析简历 (防抖锁)
   async function handleParse(candidateId: string) {
+    if (parsingLock.current.has(candidateId)) return;
+    parsingLock.current.add(candidateId);
     setParsing((p) => ({ ...p, [candidateId]: true }));
     setError(null);
     try {
       await parseResume(candidateId);
       await loadCandidates();
     } catch (e: any) { setError(e.message); }
-    finally { setParsing((p) => ({ ...p, [candidateId]: false })); }
+    finally {
+      parsingLock.current.delete(candidateId);
+      setParsing((p) => ({ ...p, [candidateId]: false }));
+    }
   }
 
   // 查看详情

@@ -5,20 +5,30 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/router";
 import { listJobs, listCandidates } from "@/services/api";
 import type { Job, Candidate } from "@/types";
 import ErrorMessage from "@/components/ErrorMessage";
 
 export default function Dashboard() {
+  const router = useRouter();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh] = useState(0); // 用于触发刷新
 
-  // 页面加载时获取数据
+  // 每次页面可见时重新拉取数据 (包括从其他页面切回来)
   useEffect(() => {
     loadData();
-  }, []);
+
+    // 监听路由变化: 从其他页面切回首页时也刷新
+    const handleRouteChange = (url: string) => {
+      if (url === "/") loadData();
+    };
+    router.events.on("routeChangeComplete", handleRouteChange);
+    return () => { router.events.off("routeChangeComplete", handleRouteChange); };
+  }, [lastRefresh]);
 
   async function loadData() {
     setLoading(true);
