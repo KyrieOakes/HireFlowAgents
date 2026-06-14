@@ -49,12 +49,10 @@ def _get_llm() -> ChatOpenAI:
         max_tokens=llm_config.max_tokens,
     )
 
-    # DeepSeek: 所有模型在 function_calling 时都需要关闭 thinking
-    # 通过 OpenAI SDK 的 extra_body 参数传递给 API
+    # DeepSeek: function_calling 需要关闭 thinking
     if llm_config.mode == "cloud":
-        kwargs["model_kwargs"] = {
-            "extra_body": {"thinking": {"type": "disabled"}}
-        }
+        # LangChain ChatOpenAI 的 extra_body 参数会直接传给 OpenAI SDK
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
     return ChatOpenAI(**kwargs)
 
