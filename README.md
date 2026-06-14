@@ -54,7 +54,18 @@ python -m app.cli demo
 python -m app.cli run <岗位文件.txt> <简历文件夹/>
 ```
 
-### 4. 启动 API 服务
+### 4. 启动前端
+
+```bash
+# 安装前端依赖 (首次运行)
+cd frontend && npm install
+
+# 启动 Next.js 开发服务器
+npm run dev
+# → http://localhost:3000
+```
+
+### 5. 启动 API 服务
 
 ```bash
 # 启动 FastAPI 服务器 (开发模式)
@@ -64,7 +75,7 @@ uvicorn app.main:app --reload
 open http://localhost:8000/docs
 ```
 
-### 5. 运行评估报告
+### 6. 运行评估报告
 
 ```bash
 # 启动 Jupyter Notebook

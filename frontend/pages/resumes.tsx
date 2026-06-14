@@ -37,13 +37,15 @@ export default function ResumesPage() {
     finally { setLoading(false); }
   }
 
-  // 上传简历
+  // 上传简历 (无名时自动生成"候选人N")
   async function handleCreate() {
     if (!resumeText.trim()) return;
     setCreating(true);
     setError(null);
     try {
-      await uploadResume(resumeText.trim(), name.trim() || undefined, filename.trim() || undefined);
+      // 未填姓名时自动生成: 候选人1, 候选人2, ...
+      const displayName = name.trim() || `候选人${candidates.length + 1}`;
+      await uploadResume(resumeText.trim(), displayName, filename.trim() || undefined);
       setName(""); setFilename(""); setResumeText("");
       await loadCandidates();
     } catch (e: any) { setError(e.message); }
@@ -134,7 +136,9 @@ export default function ResumesPage() {
           {candidates.map((c) => (
             <div key={c.candidate_id} className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between">
               <div>
-                <span className="font-medium text-gray-800">{c.name || "未命名"}</span>
+                <span className="font-medium text-gray-800">
+                  {c.name || c.candidate_id || "未命名"}
+                </span>
                 <span className="text-xs text-gray-400 ml-2">{c.candidate_id}</span>
                 {c.resume_filename && <span className="text-xs text-gray-400 ml-2">📄 {c.resume_filename}</span>}
                 {c.profile && (
