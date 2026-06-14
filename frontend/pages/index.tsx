@@ -48,8 +48,8 @@ export default function Dashboard() {
   }
 
   // 统计
-  const parsedJobs = jobs.filter((j) => j.jd_profile);
-  const parsedCandidates = candidates.filter((c) => c.profile);
+  const parsedJobs = jobs.filter((j) => j.has_profile || j.jd_profile);
+  const parsedCandidates = candidates.filter((c) => c.has_profile || c.profile);
 
   return (
     <div>

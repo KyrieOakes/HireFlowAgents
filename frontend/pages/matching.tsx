@@ -95,7 +95,7 @@ export default function MatchingPage() {
               className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
             >
               <option value="">— 请选择已解析的岗位 —</option>
-              {jobs.filter((j) => j.jd_profile).map((j) => (
+              {jobs.filter((j) => (j.has_profile || j.jd_profile)).map((j) => (
                 <option key={j.job_id} value={j.job_id}>{j.title || j.job_id}</option>
               ))}
             </select>
@@ -104,7 +104,7 @@ export default function MatchingPage() {
             开始匹配
           </LoadingButton>
         </div>
-        {jobs.filter((j) => j.jd_profile).length === 0 && (
+        {jobs.filter((j) => (j.has_profile || j.jd_profile)).length === 0 && (
           <p className="text-xs text-gray-400 mt-2">还没有已解析的岗位，请先到「岗位管理」创建并解析JD。</p>
         )}
       </div>

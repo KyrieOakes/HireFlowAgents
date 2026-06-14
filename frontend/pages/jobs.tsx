@@ -146,14 +146,14 @@ export default function JobsPage() {
                     {job.title || "未命名岗位"}
                   </span>
                   <span className="text-xs text-gray-400 ml-2">{job.job_id}</span>
-                  {job.jd_profile && (
+                  {(job.has_profile || job.jd_profile) && (
                     <span className="ml-2 inline-block px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">
                       已解析
                     </span>
                   )}
                 </div>
                 <div className="flex gap-2">
-                  {!job.jd_profile && (
+                  {!(job.has_profile || job.jd_profile) && (
                     <LoadingButton
                       onClick={() => handleParse(job.job_id)}
                       loading={!!parsing[job.job_id]}

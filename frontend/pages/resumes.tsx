@@ -147,7 +147,7 @@ export default function ResumesPage() {
                 </span>
                 <span className="text-xs text-gray-400 ml-2">{c.candidate_id}</span>
                 {c.resume_filename && <span className="text-xs text-gray-400 ml-2">📄 {c.resume_filename}</span>}
-                {c.profile && (
+                {(c.has_profile || c.profile) && (
                   <span className="ml-2 inline-block px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">已解析</span>
                 )}
                 {c.profile && (
@@ -159,7 +159,7 @@ export default function ResumesPage() {
                 )}
               </div>
               <div className="flex gap-2 flex-shrink-0 ml-4">
-                {!c.profile && (
+                {!(c.has_profile || c.profile) && (
                   <LoadingButton onClick={() => handleParse(c.candidate_id)} loading={!!parsing[c.candidate_id]} variant="secondary">
                     解析
                   </LoadingButton>

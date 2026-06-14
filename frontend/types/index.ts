@@ -9,6 +9,8 @@ export interface Job {
   jd_text?: string;
   jd_profile?: JDProfile | null;
   rubric?: Rubric | null;
+  // 列表 API 返回 has_profile 标志 (不返回完整 profile 避免数据过大)
+  has_profile?: boolean;
 }
 
 /** JD 结构化解析结果 */
@@ -45,6 +47,8 @@ export interface Candidate {
   resume_filename?: string | null;
   resume_text?: string;
   profile?: CandidateProfile | null;
+  // 列表 API 返回 has_profile 标志
+  has_profile?: boolean;
 }
 
 /** 候选人结构化画像 */
