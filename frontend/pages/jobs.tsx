@@ -9,6 +9,7 @@ import {
   uploadJob,
   parseJob,
   getJob,
+  deleteJob,
 } from "@/services/api";
 import LoadingButton from "@/components/LoadingButton";
 import ErrorMessage from "@/components/ErrorMessage";
@@ -79,6 +80,16 @@ export default function JobsPage() {
       parsingLock.current.delete(jobId);
       setParsing((prev) => ({ ...prev, [jobId]: false }));
     }
+  }
+
+  // 删除岗位
+  async function handleDelete(jobId: string, title: string | null) {
+    if (!confirm(`确定要删除「${title || jobId}」吗？\n删除后不可恢复。`)) return;
+    setError(null);
+    try {
+      await deleteJob(jobId);
+      await loadJobs();
+    } catch (e: any) { setError(e.message); }
   }
 
   // 查看岗位详情
@@ -168,6 +179,13 @@ export default function JobsPage() {
                     variant="secondary"
                   >
                     查看详情
+                  </LoadingButton>
+                  <LoadingButton
+                    onClick={() => handleDelete(job.job_id, job.title)}
+                    loading={false}
+                    variant="danger"
+                  >
+                    删除
                   </LoadingButton>
                 </div>
               </div>

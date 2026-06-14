@@ -10,6 +10,7 @@ import {
   uploadResumeFile,
   parseResume,
   getCandidate,
+  deleteCandidate,
 } from "@/services/api";
 import LoadingButton from "@/components/LoadingButton";
 import ErrorMessage from "@/components/ErrorMessage";
@@ -112,6 +113,16 @@ export default function ResumesPage() {
       parsingLock.current.delete(candidateId);
       setParsing((p) => ({ ...p, [candidateId]: false }));
     }
+  }
+
+  // 删除候选人
+  async function handleDelete(candidateId: string, displayName: string | null) {
+    if (!confirm(`确定要删除「${displayName || candidateId}」吗？\n删除后不可恢复。`)) return;
+    setError(null);
+    try {
+      await deleteCandidate(candidateId);
+      await loadCandidates();
+    } catch (e: any) { setError(e.message); }
   }
 
   // 查看详情
@@ -276,6 +287,9 @@ export default function ResumesPage() {
                 )}
                 <LoadingButton onClick={() => handleView(c.candidate_id)} loading={false} variant="secondary">
                   详情
+                </LoadingButton>
+                <LoadingButton onClick={() => handleDelete(c.candidate_id, c.name)} loading={false} variant="danger">
+                  删除
                 </LoadingButton>
               </div>
             </div>

@@ -112,14 +112,17 @@ export async function getCandidate(candidateId: string): Promise<Candidate> {
 // 匹配 API
 // ================================================================
 
-/** 执行匹配 + 排序 */
-export async function runMatching(jobId: string): Promise<{
+/** 执行匹配 + 排序 (limit=0 表示全部) */
+export async function runMatching(jobId: string, limit: number = 0): Promise<{
   job_id: string;
+  total_candidates_in_db: number;
   candidates_matched: number;
+  limit: number | null;
   ranking: any;
   match_results: MatchResult[];
 }> {
-  return request(`/jobs/${jobId}/match`, { method: "POST" });
+  const params = limit > 0 ? `?limit=${limit}` : "";
+  return request(`/jobs/${jobId}/match${params}`, { method: "POST" });
 }
 
 /** 获取排名结果 */
@@ -130,4 +133,18 @@ export async function getRanking(jobId: string): Promise<RankingResult> {
 /** 获取单个候选人详细评分 */
 export async function getMatchDetail(jobId: string, candidateId: string): Promise<MatchDetail> {
   return request(`/jobs/${jobId}/candidates/${candidateId}/detail`);
+}
+
+// ================================================================
+// 删除 API
+// ================================================================
+
+/** 删除岗位 */
+export async function deleteJob(jobId: string): Promise<{ message: string }> {
+  return request(`/jobs/${jobId}`, { method: "DELETE" });
+}
+
+/** 删除候选人 */
+export async function deleteCandidate(candidateId: string): Promise<{ message: string }> {
+  return request(`/resumes/${candidateId}`, { method: "DELETE" });
 }

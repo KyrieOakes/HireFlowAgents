@@ -306,4 +306,34 @@ def get_match_result(
             models.MatchResult.candidate_id == candidate_id,
         )
         .first()
+
+
+# ============================================================
+# 删除操作
+# ============================================================
+
+def delete_job(db: Session, job_id: str) -> bool:
+    """
+    删除岗位及其关联的匹配结果。
+    返回 True 表示删除成功, False 表示岗位不存在。
+    """
+    job = get_job(db, job_id)
+    if not job:
+        return False
+    db.delete(job)
+    db.commit()
+    return True
+
+
+def delete_candidate(db: Session, candidate_id: str) -> bool:
+    """
+    删除候选人及其关联的简历chunk和匹配结果。
+    返回 True 表示删除成功, False 表示不存在。
+    """
+    candidate = get_candidate(db, candidate_id)
+    if not candidate:
+        return False
+    db.delete(candidate)
+    db.commit()
+    return True
     )

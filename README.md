@@ -12,6 +12,8 @@ HireFlow 模拟完整招聘筛选流程：JD 分析 → 简历解析 → 候选�
 - 7 维度候选人评分体系
 - LLM 本地/云端双模式 (一键切换)
 - Human-in-the-loop 人工审核
+- PDF/DOCX 文件上传解析
+- 评估体系 + 历史对比
 
 ## 快速开始
 
@@ -92,10 +94,13 @@ jupyter notebook 系统评估报告.ipynb
 | `POST` | `/jobs/upload` | 上传岗位描述文本 |
 | `POST` | `/jobs/{id}/parse` | 调用 JD Agent 解析 |
 | `GET` | `/jobs/{id}` | 获取岗位详情 |
+| `DELETE` | `/jobs/{id}` | 删除岗位 |
 | `POST` | `/resumes/upload` | 上传简历文本 |
+| `POST` | `/resumes/upload-file` | 上传 PDF/DOCX/TXT 文件 |
 | `POST` | `/resumes/{id}/parse` | 调用 Resume Agent 解析 |
 | `GET` | `/resumes/{id}` | 获取候选人详情 |
-| `POST` | `/jobs/{id}/match` | 执行匹配评分 + 排序 |
+| `DELETE` | `/resumes/{id}` | 删除候选人 |
+| `POST` | `/jobs/{id}/match?limit=N` | 执行匹配评分 + 排序 (支持 TopN) |
 | `GET` | `/jobs/{id}/ranking` | 获取排序结果 |
 
 完整 API 文档: http://localhost:8000/docs (启动后访问)

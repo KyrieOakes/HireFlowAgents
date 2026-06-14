@@ -17,6 +17,7 @@ export default function MatchingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string>("");
+  const [limit, setLimit] = useState<number>(5);  // 匹配人数限制, 默认Top5
   const [matching, setMatching] = useState(false);
   const matchLock = useRef(false);        // 匹配防抖锁
   const detailLock = useRef<Set<string>>(new Set()); // 详情防抖锁
@@ -57,7 +58,7 @@ export default function MatchingPage() {
     // 启动计时器: 每秒 +1, 让用户看到等待进度
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     try {
-      const res = await runMatching(selectedJobId);
+      const res = await runMatching(selectedJobId, limit);
       const rankRes = await getRanking(selectedJobId);
       setRanked(rankRes.ranked_candidates);
     } catch (e: any) {
@@ -111,6 +112,19 @@ export default function MatchingPage() {
               {jobs.filter((j) => (j.has_profile || j.jd_profile)).map((j) => (
                 <option key={j.job_id} value={j.job_id}>{j.title || j.job_id}</option>
               ))}
+            </select>
+          </div>
+          <div className="w-32">
+            <label className="block text-xs text-gray-500 mb-1">匹配人数</label>
+            <select
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+              className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+            >
+              <option value={5}>Top 5</option>
+              <option value={10}>Top 10</option>
+              <option value={15}>Top 15</option>
+              <option value={0}>全部</option>
             </select>
           </div>
           <LoadingButton onClick={handleMatch} loading={matching} disabled={!selectedJobId}>

@@ -267,3 +267,11 @@ async def list_candidates(db: Session = Depends(get_db)):
         }
         for c in candidates
     ]
+
+
+@router.delete("/{candidate_id}")
+async def delete_candidate_endpoint(candidate_id: str, db: Session = Depends(get_db)):
+    """删除候选人及其关联的简历chunk和匹配结果。"""
+    if crud.delete_candidate(db, candidate_id):
+        return {"message": "候选人已删除", "candidate_id": candidate_id}
+    raise HTTPException(status_code=404, detail="候选人不存在")

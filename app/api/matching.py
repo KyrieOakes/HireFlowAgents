@@ -20,14 +20,19 @@ router = APIRouter(prefix="/jobs", tags=["matching"])
 
 
 @router.post("/{job_id}/match")
-async def run_matching(job_id: str, db: Session = Depends(get_db)):
+async def run_matching(
+    job_id: str,
+    limit: int = 0,
+    db: Session = Depends(get_db),
+):
     """
     执行候选人匹配 + 排序。
 
-    这是核心 API 端点，调用 Match Agent 和 Ranking Agent。
+    参数:
+        limit: 最多匹配多少候选人 (0=全部)。用于控制 LLM 调用次数。
     步骤:
     1. 获取岗位的 JD profile
-    2. 获取所有候选人 profile
+    2. 获取所有候选人 profile (按 limit 截断)
     3. 批量匹配评分
     4. 排序 + 生成 shortlist
     5. 保存结果到数据库
@@ -49,12 +54,17 @@ async def run_matching(job_id: str, db: Session = Depends(get_db)):
     if not parsed_candidates:
         raise HTTPException(status_code=400, detail="没有已解析的候选人，请先解析简历")
 
-    # 构建候选人画像列表
+    # 构建候选人画像列表 (按 limit 截断, 0=全部)
     candidate_profiles = []
     for c in parsed_candidates:
         profile = c.profile_json.copy()
         profile["candidate_id"] = c.candidate_id
         candidate_profiles.append(profile)
+
+    # 应用 limit (0=不限制)
+    total_available = len(candidate_profiles)
+    if limit and limit > 0:
+        candidate_profiles = candidate_profiles[:limit]
 
     # Step 3: 匹配评分
     jd_profile = job.jd_profile_json
@@ -88,7 +98,9 @@ async def run_matching(job_id: str, db: Session = Depends(get_db)):
 
     return {
         "job_id": job_id,
+        "total_candidates_in_db": total_available,
         "candidates_matched": len(match_results),
+        "limit": limit if limit > 0 else None,
         "ranking": ranking,
         "match_results": match_results,
     }

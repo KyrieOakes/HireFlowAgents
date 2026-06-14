@@ -132,3 +132,11 @@ async def list_jobs(db: Session = Depends(get_db)):
         }
         for j in jobs
     ]
+
+
+@router.delete("/{job_id}")
+async def delete_job_endpoint(job_id: str, db: Session = Depends(get_db)):
+    """删除岗位及其关联的匹配结果。"""
+    if crud.delete_job(db, job_id):
+        return {"message": "岗位已删除", "job_id": job_id}
+    raise HTTPException(status_code=404, detail="岗位不存在")
