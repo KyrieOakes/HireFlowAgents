@@ -38,32 +38,31 @@ async def parse_resume(
     """
     # 构造系统提示词
     # 详细告诉 LLM 每个字段应该提取什么
-    system_prompt = """你是一位资深的 HR 和猎头顾问，拥有丰富的简历筛选经验。
-你的任务是从候选人简历中提取结构化的信息。
+    system_prompt = """你是一位资深 HR，输出必须使用中文。
 
-提取规则:
-1. 姓名(name): 从简历头部提取候选人姓名
+【语言要求 - 最高优先级】
+所有文字输出必须是中文。具体规则:
+- 技能名称: "Machine Learning"→"机器学习", 但 Python/Docker 保留原样
+- 学位: "Bachelor"→"学士", "Master"→"硕士", "PhD"→"博士"
+- 项目描述、工作内容、优势、风险点: 全部用中文
+- 专有名词保留原文: 学校名(MIT)、公司名(Google)、技术术语(Docker, RAG)
+
+【提取规则】
+1. 姓名(name): 从简历头部提取
 2. 邮箱(email): 提取邮箱地址
-3. 电话(phone): 提取电话号码(如果有)
-4. 教育经历(education): 每条教育经历提取 degree(学位)、school(学校)、major(专业)、时间
-5. 技能(skills): 列出所有技术技能，如编程语言、框架、工具、平台等
-6. 项目经历(projects): 每个项目提取 name(名称)、description(描述)、technologies(使用的技术)
-7. 工作/实习经历(work_experience): 每个经历提取 company(公司)、title(职位)、duration(时间)、description(内容)
-8. 证书(certifications): 列出专业证书
-9. 优势(strengths): 分析候选人的亮点，如匹配的技术栈、优秀的项目经验等
-10. 风险点(risks): 识别潜在问题，如经验不足、技能缺口、频繁跳槽、经历断层等
-11. 缺失信息(missing_info): 简历中没有提及但对招聘决策重要的信息
+3. 教育经历(education): degree(学位,中文)/school(学校,原文)/major(专业,中文)
+4. 技能(skills): 技术技能列表, 中文描述+原文保留
+5. 项目经历(projects): name(原文)/description(中文)/technologies(原文)
+6. 工作经历(work_experience): company(原文)/title(中文)/description(中文)
+7. 证书(certifications): 专业证书
+8. 优势(strengths): 用中文总结候选人亮点
+9. 风险点(risks): 用中文指出潜在问题
+10. 缺失信息(missing_info): 用中文列出缺失项
 
-重要:
-- 如果某个字段在简历中找不到，用空列表[]表示，不要编造
-- 教育经历和项目经历使用嵌套对象格式 (参考输出格式示例)
-- 优势和风险点要具体，不要泛泛而谈
-- estimated_years_of_experience 从工作经历中推算，如果无法推算则设为 null
-- **中文输出**: 所有描述性字段必须使用中文输出
-  * 技能名称翻译为中文: "Machine Learning" → "机器学习", 编程语言/框架保留原文 (Python, FastAPI)
-  * 学位翻译: "Bachelor" → "学士", "Master" → "硕士", "PhD" → "博士"
-  * 项目描述、工作内容、优势、风险点等全部用中文
-  * 专有名词保留原文: 学校名(如 MIT, Stanford)、公司名(如 Google)、技术术语(如 Docker, RAG)"""
+【重要】
+- 找不到的用空列表[], 不要编造
+- 教育/项目使用嵌套对象格式
+- 经验年限从工作经历推算, 无数据则 null"""
 
     # 调用 LLM 进行结构化提取
     candidate_profile = call_llm_structured(

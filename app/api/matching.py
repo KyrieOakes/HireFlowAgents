@@ -15,6 +15,7 @@ from app.database.session import get_db
 from app.database import crud
 from app.agents.match_agent import batch_match_candidates
 from app.agents.ranking_agent import rank_candidates
+from app.services.pre_screening import pre_screen_candidates
 
 router = APIRouter(prefix="/jobs", tags=["matching"])
 
@@ -26,16 +27,17 @@ async def run_matching(
     db: Session = Depends(get_db),
 ):
     """
-    执行候选人匹配 + 排序。
+    两阶段匹配 + 排序:
+      Stage 1 (粗筛): 关键词匹配, 零LLM调用, 筛选出 top_k
+      Stage 2 (精排): LLM 多维度评分, 仅对粗筛结果
 
     参数:
-        limit: 最多匹配多少候选人 (0=全部)。用于控制 LLM 调用次数。
+        limit: 最终展示多少候选人 (0=全部)
     步骤:
-    1. 获取岗位的 JD profile
-    2. 获取所有候选人 profile (按 limit 截断)
-    3. 批量匹配评分
-    4. 排序 + 生成 shortlist
-    5. 保存结果到数据库
+    1. 粗筛: 从全部候选人中快速筛选 top_candidates
+    2. 精排: LLM 对粗筛结果进行详细评分
+    3. 排序 + 生成 shortlist
+    4. 保存结果到数据库
     """
     # Step 1: 获取岗位
     job = crud.get_job(db, job_id)
@@ -54,17 +56,35 @@ async def run_matching(
     if not parsed_candidates:
         raise HTTPException(status_code=400, detail="没有已解析的候选人，请先解析简历")
 
-    # 构建候选人画像列表 (按 limit 截断, 0=全部)
-    candidate_profiles = []
+    # 构建候选人画像列表
+    all_candidates = []
     for c in parsed_candidates:
         profile = c.profile_json.copy()
         profile["candidate_id"] = c.candidate_id
-        candidate_profiles.append(profile)
+        all_candidates.append(profile)
 
-    # 应用 limit (0=不限制)
-    total_available = len(candidate_profiles)
+    total_in_db = len(all_candidates)
+
+    # ---- Stage 1: 粗筛 (关键词匹配, 零LLM调用) ----
+    # 粗筛池大小: limit * 3, 最少15个, 最多不超过全部
+    pool_size = max(limit * 3, 15) if limit and limit > 0 else len(all_candidates)
+    pool_size = min(pool_size, len(all_candidates))
+
+    candidate_profiles = pre_screen_candidates(
+        jd_profile=jd_profile,
+        candidates=all_candidates,
+        top_k=pool_size,
+    )
+
+    prescreened_count = len(candidate_profiles)
+
+    # ---- Stage 2: 精排 (LLM 多维度评分) ----
+    # 对粗筛后的候选人进行 LLM 评分
+    # 如果有限制, 最终只保留 limit 个
     if limit and limit > 0:
         candidate_profiles = candidate_profiles[:limit]
+
+    matched_count = len(candidate_profiles)
 
     # Step 3: 匹配评分
     jd_profile = job.jd_profile_json
@@ -98,8 +118,9 @@ async def run_matching(
 
     return {
         "job_id": job_id,
-        "total_candidates_in_db": total_available,
-        "candidates_matched": len(match_results),
+        "total_in_db": total_in_db,
+        "prescreened": prescreened_count,
+        "llm_scored": matched_count,
         "limit": limit if limit > 0 else None,
         "ranking": ranking,
         "match_results": match_results,

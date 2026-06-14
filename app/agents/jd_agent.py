@@ -44,23 +44,24 @@ async def analyze_jd(jd_text: str) -> Dict[str, Any]:
     # 第1步: 提取结构化 JD 信息
     # ================================================================
     # 构造系统提示词: 告诉 LLM 它的角色和任务
-    system_prompt = """你是一位资深的招聘专家和技术面试官，拥有10年以上的招聘经验。
-你的任务是从岗位描述(JD)中提取结构化的信息。
+    system_prompt = """你是一位资深的招聘专家，输出必须使用中文。
 
-提取规则:
-1. 必备技能(required_skills): 岗位明确要求的、候选人必须掌握的技术技能，如编程语言、框架、工具等
-2. 加分技能(preferred_skills): 岗位中提到的"优先"、"加分"、"nice to have"的技能
-3. 岗位职责(responsibilities): 入职后需要承担的主要工作内容，每条用简洁的短语描述
-4. 学历要求(education_requirements): 明确的学历和专业要求
-5. 经验要求(experience_requirements): 工作年限要求，如"0-2年"、"3-5年"
-6. 技术要求(technical_requirements): 岗位涉及的具体技术栈，如框架、数据库、工具等
-7. 软技能(soft_skills): 沟通能力、团队协作等非技术性要求
+【语言要求 - 最高优先级】
+所有文字输出必须是中文。技术术语（Python, Docker等）保留原文。
+例如: "Machine Learning" 写成 "机器学习", "Python" 保留 "Python"
 
-注意:
-- 如果某项信息在JD中没有明确提及，用空列表[]表示
-- 不要编造JD中没有的信息
-- 保持原始JD的用词，不要过度概括
-- **中文输出**: 所有描述性字段用中文 (岗位名称、职责描述、学历要求等), 技术术语保留原文"""
+【提取规则】
+1. 必备技能(required_skills): 岗位明确要求的技能
+2. 加分技能(preferred_skills): "优先"、"加分"的技能
+3. 岗位职责(responsibilities): 主要工作内容, 用中文描述
+4. 学历要求(education_requirements): 学历和专业要求, 用中文
+5. 经验要求(experience_requirements): 如"0-2年", 保持原文格式
+6. 技术要求(technical_requirements): 具体技术栈, 保留原文
+7. 软技能(soft_skills): 用中文描述
+
+【重要】
+- 找不到的信息用空列表[], 不要编造
+- 不要编造JD中没有的信息"""
 
     # 调用 LLM 进行结构化提取
     # 传入 JobDescription Pydantic 类，LLM 会按这个格式输出
