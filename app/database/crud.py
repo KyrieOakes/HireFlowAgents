@@ -306,6 +306,7 @@ def get_match_result(
             models.MatchResult.candidate_id == candidate_id,
         )
         .first()
+    )
 
 
 # ============================================================
@@ -336,4 +337,3 @@ def delete_candidate(db: Session, candidate_id: str) -> bool:
     db.delete(candidate)
     db.commit()
     return True
-    )
