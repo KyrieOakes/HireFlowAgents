@@ -204,27 +204,24 @@ async def batch_match_candidates(
     返回:
         List[dict]: 所有候选人的匹配评分结果
     """
-    results = []
+    import asyncio
 
-    for profile in candidate_profiles:
+    # 并行匹配所有候选人 (大幅提速: 5人串行60s → 并行~15s)
+    async def match_one(profile):
         candidate_id = profile.get("candidate_id", "unknown")
-
-        # 获取该候选人的 RAG 证据
         evidence = None
         if evidence_by_candidate:
             evidence = evidence_by_candidate.get(candidate_id)
-
-        # 调用单候选人匹配
-        result = await match_candidate(
+        return await match_candidate(
             jd_profile=jd_profile,
             candidate_profile=profile,
             evidence_list=evidence,
             rubric=rubric,
         )
-        results.append(result)
+
+    results = await asyncio.gather(*[match_one(p) for p in candidate_profiles])
 
     # ---- 后处理: 强制翻译为中文 ----
-    # 本地模型 (hermes-3) 可能仍输出英文, 这里做一次批量翻译
     results = await _ensure_chinese_results(results)
 
     return results

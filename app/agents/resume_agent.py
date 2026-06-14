@@ -91,14 +91,14 @@ async def batch_parse_resumes(
     返回:
         List[dict]: 所有候选人画像的列表
     """
-    profiles = []
+    import asyncio
 
-    for candidate_id, resume_text in resume_texts.items():
-        # 调用 parse_resume 解析单份简历
-        profile = await parse_resume(
-            resume_text=resume_text,
-            candidate_id=candidate_id,
-        )
-        profiles.append(profile)
+    # 并行解析所有简历
+    async def parse_one(cid, text):
+        return await parse_resume(resume_text=text, candidate_id=cid)
 
-    return profiles
+    profiles = await asyncio.gather(
+        *[parse_one(cid, text) for cid, text in resume_texts.items()]
+    )
+
+    return list(profiles)
