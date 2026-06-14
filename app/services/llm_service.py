@@ -35,24 +35,28 @@ def _get_llm() -> ChatOpenAI:
         base_url = llm_config.local_base_url
         api_key = llm_config.local_api_key
         model = llm_config.local_model
-        # 本地模型: 不需要额外参数
-        extra_kwargs = {}
     else:
         base_url = llm_config.cloud_base_url
         api_key = llm_config.cloud_api_key
         model = llm_config.cloud_model
-        # DeepSeek v4-pro: 默认是 thinking 模式，function_calling 需要关闭
-        # 传入 thinking=disabled 禁用思考模式
-        extra_kwargs = {"thinking": {"type": "disabled"}}
 
-    return ChatOpenAI(
+    # 基础参数
+    kwargs = dict(
         base_url=base_url,
         api_key=api_key,
         model=model,
         temperature=llm_config.temperature,
         max_tokens=llm_config.max_tokens,
-        **extra_kwargs,
     )
+
+    # DeepSeek thinking 参数: 通过 extra_body 传递
+    # flash 模型默认关闭 thinking, pro 模型需要显式关闭
+    if llm_config.mode == "cloud" and "pro" in model.lower():
+        kwargs["model_kwargs"] = {
+            "extra_body": {"thinking": {"type": "disabled"}}
+        }
+
+    return ChatOpenAI(**kwargs)
 
 
 def call_llm(
