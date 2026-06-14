@@ -130,16 +130,25 @@ async def run_matching(
 
 
 @router.get("/{job_id}/ranking")
-async def get_ranking(job_id: str, db: Session = Depends(get_db)):
+async def get_ranking(
+    job_id: str,
+    limit: int = 0,
+    db: Session = Depends(get_db),
+):
     """
-    获取候选人排名结果。
+    获取候选人排名结果 (支持limit限制)。
 
     从数据库中读取之前保存的匹配评分，按分数排序返回。
+    参数: limit=0 返回全部, limit>0 只返回前N条。
     """
     match_results = crud.get_match_results_by_job(db, job_id)
 
     if not match_results:
         raise HTTPException(status_code=404, detail="该岗位还没有匹配结果，请先调用 /jobs/{job_id}/match")
+
+    # 应用 limit
+    if limit and limit > 0:
+        match_results = match_results[:limit]
 
     return {
         "job_id": job_id,

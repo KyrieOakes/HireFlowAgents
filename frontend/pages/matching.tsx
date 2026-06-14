@@ -59,7 +59,7 @@ export default function MatchingPage() {
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     try {
       const res = await runMatching(selectedJobId, limit);
-      const rankRes = await getRanking(selectedJobId);
+      const rankRes = await getRanking(selectedJobId, limit);
       setRanked(rankRes.ranked_candidates);
     } catch (e: any) {
       setError(e.message);

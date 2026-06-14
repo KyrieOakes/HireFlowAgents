@@ -125,9 +125,10 @@ export async function runMatching(jobId: string, limit: number = 0): Promise<{
   return request(`/jobs/${jobId}/match${params}`, { method: "POST" });
 }
 
-/** 获取排名结果 */
-export async function getRanking(jobId: string): Promise<RankingResult> {
-  return request(`/jobs/${jobId}/ranking`);
+/** 获取排名结果 (limit=0 返回全部) */
+export async function getRanking(jobId: string, limit: number = 0): Promise<RankingResult> {
+  const params = limit > 0 ? `?limit=${limit}` : "";
+  return request(`/jobs/${jobId}/ranking${params}`);
 }
 
 /** 获取单个候选人详细评分 */

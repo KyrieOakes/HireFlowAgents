@@ -223,4 +223,91 @@ async def batch_match_candidates(
         )
         results.append(result)
 
+    # ---- 后处理: 强制翻译为中文 ----
+    # 本地模型 (hermes-3) 可能仍输出英文, 这里做一次批量翻译
+    results = await _ensure_chinese_results(results)
+
     return results
+
+
+async def _ensure_chinese_results(
+    results: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    确保 match agent 的输出是中文。
+
+    检测每个结果中的 strengths, risks, summary 是否以英文为主,
+    如果是, 用一次批量 LLM 调用翻译为中文。
+    """
+    # 收集所有需要翻译的文本
+    texts_to_translate: List[Tuple[int, str, str]] = []  # (result_index, field_name, text)
+
+    for i, r in enumerate(results):
+        for field in ["strengths", "risks", "summary"]:
+            value = r.get(field, "")
+            if isinstance(value, str) and value.strip():
+                if _is_mostly_ascii(value):
+                    texts_to_translate.append((i, field, value))
+            elif isinstance(value, list):
+                for j, item in enumerate(value):
+                    if isinstance(item, str) and _is_mostly_ascii(item):
+                        texts_to_translate.append((i, f"{field}[{j}]", item))
+
+    if not texts_to_translate:
+        return results
+
+    # 构建批量翻译请求
+    from app.services.llm_service import call_llm
+    items_text = "\n---\n".join(
+        f"[{idx}:{field}] {text}"
+        for idx, field, text in texts_to_translate
+    )
+
+    translation_prompt = f"""将以下英文招聘评价翻译为中文。
+保持技术术语原文, 只翻译描述性内容。
+输出格式: 每行 [索引:字段] 中文翻译
+
+{items_text}"""
+
+    try:
+        translated = call_llm(
+            system_prompt="你是专业翻译。只输出翻译结果, 不要解释。",
+            user_message=translation_prompt,
+        )
+
+        # 解析翻译结果 (格式: [0:strengths] 翻译文字)
+        translation_map: Dict[str, str] = {}
+        for line in translated.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("[") and "] " in line:
+                key, _, text = line.partition("] ")
+                translation_map[key.lstrip("[")] = text
+
+        # 替换回原结果
+        for idx, field, _ in texts_to_translate:
+            map_key = f"{idx}:{field}"
+            if map_key in translation_map:
+                translated_text = translation_map[map_key]
+                result = results[idx]
+                if "[" in field and field.endswith("]"):
+                    # 列表元素: "strengths[0]" → result["strengths"][0]
+                    field_name, _, idx_str = field.partition("[")
+                    idx_int = int(idx_str.rstrip("]"))
+                    if isinstance(result.get(field_name), list):
+                        result[field_name][idx_int] = translated_text
+                else:
+                    result[field] = translated_text
+
+    except Exception:
+        # 翻译失败不阻塞流程
+        pass
+
+    return results
+
+
+def _is_mostly_ascii(text: str) -> bool:
+    """检查文本是否以英文为主 (ASCII字符占比 > 50%)。"""
+    if not text:
+        return False
+    ascii_count = sum(1 for c in text if ord(c) < 128)
+    return ascii_count / len(text) > 0.5
