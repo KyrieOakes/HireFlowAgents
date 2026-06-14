@@ -65,6 +65,9 @@ async def run_matching(
 
     total_in_db = len(all_candidates)
 
+    # JD profile (后续多次使用)
+    jd_profile = job.jd_profile_json
+
     # ---- Stage 1: 粗筛 (关键词匹配, 零LLM调用) ----
     # 粗筛池大小: limit * 3, 最少15个, 最多不超过全部
     pool_size = max(limit * 3, 15) if limit and limit > 0 else len(all_candidates)
@@ -87,7 +90,6 @@ async def run_matching(
     matched_count = len(candidate_profiles)
 
     # Step 3: 匹配评分
-    jd_profile = job.jd_profile_json
     rubric = job.rubric_json or jd_profile.get("rubric")
 
     match_results = await batch_match_candidates(
