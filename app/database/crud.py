@@ -163,7 +163,10 @@ def update_candidate_profile(
     candidate = get_candidate(db, candidate_id)
     if candidate:
         candidate.profile_json = profile
-        if profile.get("name"):
+        # 保护自动命名的申请人: 如果名字以"申请人"开头 (系统自动生成),
+        # 说明原始简历中没有真实姓名, 不要被 LLM 从简历中提取的名字覆盖
+        is_auto_named = candidate.name and candidate.name.startswith("申请人")
+        if profile.get("name") and not is_auto_named:
             candidate.name = profile["name"]
         if profile.get("email"):
             candidate.email = profile["email"]

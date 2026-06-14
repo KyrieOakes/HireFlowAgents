@@ -3,8 +3,8 @@
 // ================================================================
 
 import { useEffect, useState, useRef } from "react";
-import type { Job, RankedCandidate, MatchDetail } from "@/types";
-import { listJobs, runMatching, getRanking, getMatchDetail } from "@/services/api";
+import type { Job, Candidate, RankedCandidate, MatchDetail } from "@/types";
+import { listJobs, listCandidates, runMatching, getRanking, getMatchDetail } from "@/services/api";
 import LoadingButton from "@/components/LoadingButton";
 import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
@@ -13,6 +13,7 @@ import ScoreBar from "@/components/ScoreBar";
 
 export default function MatchingPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string>("");
@@ -23,12 +24,20 @@ export default function MatchingPage() {
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [detailId, setDetailId] = useState<string>("");
   const [detailLoading, setDetailLoading] = useState(false);
+  const [elapsed, setElapsed] = useState(0);  // 匹配耗时计时器
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // candidate_id → name 映射表 (用于显示姓名而非ID)
+  const nameMap: Record<string, string> = {};
+  candidates.forEach((c) => { nameMap[c.candidate_id] = c.name || c.candidate_id; });
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        setJobs(await listJobs());
+        const [jobList, candidateList] = await Promise.all([listJobs(), listCandidates()]);
+        setJobs(jobList);
+        setCandidates(candidateList);
       } catch (e: any) {
         setError(e.message);
       } finally {
@@ -37,13 +46,16 @@ export default function MatchingPage() {
     })();
   }, []);
 
-  // 执行匹配 (防抖锁)
+  // 执行匹配 (防抖锁 + 耗时计时器)
   async function handleMatch() {
     if (!selectedJobId || matchLock.current) return;
     matchLock.current = true;
     setMatching(true);
     setError(null);
     setRanked([]);
+    setElapsed(0);
+    // 启动计时器: 每秒 +1, 让用户看到等待进度
+    timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     try {
       const res = await runMatching(selectedJobId);
       const rankRes = await getRanking(selectedJobId);
@@ -51,6 +63,7 @@ export default function MatchingPage() {
     } catch (e: any) {
       setError(e.message);
     } finally {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
       matchLock.current = false;
       setMatching(false);
     }
@@ -104,13 +117,28 @@ export default function MatchingPage() {
             开始匹配
           </LoadingButton>
         </div>
+        {/* 匹配进度提示 */}
+        {matching && (
+          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center gap-3">
+              <svg className="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+              <span className="text-sm text-blue-700">
+                正在匹配中... 正在调用 JD Agent + Resume Agent + Match Agent + Ranking Agent
+              </span>
+            </div>
+            <p className="text-xs text-blue-400 mt-2">已等待 {elapsed} 秒 | 本地模型处理中, 请耐心等候</p>
+          </div>
+        )}
         {jobs.filter((j) => (j.has_profile || j.jd_profile)).length === 0 && (
           <p className="text-xs text-gray-400 mt-2">还没有已解析的岗位，请先到「岗位管理」创建并解析JD。</p>
         )}
       </div>
 
       {/* ---- 排序结果 ---- */}
-      {ranked.length === 0 ? (
+      {!matching && ranked.length === 0 ? (
         <EmptyState title="还没有排名结果" description="选择一个岗位后点击「开始匹配」" />
       ) : (
         <>
@@ -128,7 +156,7 @@ export default function MatchingPage() {
                       {c.rank}
                     </span>
                     <div>
-                      <span className="font-medium text-gray-800">{c.candidate_id}</span>
+                      <span className="font-medium text-gray-800">{nameMap[c.candidate_id] || c.candidate_id}</span>
                       <span className="text-xs text-gray-400 ml-2">总分</span>
                     </div>
                   </div>
