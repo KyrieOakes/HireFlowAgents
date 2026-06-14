@@ -58,7 +58,12 @@ async def parse_resume(
 - 如果某个字段在简历中找不到，用空列表[]表示，不要编造
 - 教育经历和项目经历使用嵌套对象格式 (参考输出格式示例)
 - 优势和风险点要具体，不要泛泛而谈
-- estimated_years_of_experience 从工作经历中推算，如果无法推算则设为 null"""
+- estimated_years_of_experience 从工作经历中推算，如果无法推算则设为 null
+- **中文输出**: 所有描述性字段必须使用中文输出
+  * 技能名称翻译为中文: "Machine Learning" → "机器学习", 编程语言/框架保留原文 (Python, FastAPI)
+  * 学位翻译: "Bachelor" → "学士", "Master" → "硕士", "PhD" → "博士"
+  * 项目描述、工作内容、优势、风险点等全部用中文
+  * 专有名词保留原文: 学校名(如 MIT, Stanford)、公司名(如 Google)、技术术语(如 Docker, RAG)"""
 
     # 调用 LLM 进行结构化提取
     candidate_profile = call_llm_structured(

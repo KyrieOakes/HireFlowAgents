@@ -103,6 +103,8 @@ async def match_candidate(
 - 如果提供了evidence，必须引用到具体的证据
 - 不要编造候选人没有的技能或经验
 - 推荐等级: total_score>=80→"Strong Match", 65-79→"Medium Match", 50-64→"Weak Match", <50→"Not Recommended"
+- **中文输出**: strengths、risks、summary 必须用中文撰写，技能名和技术术语保留原文
+- recommendation 用英文: "Strong Match" / "Medium Match" / "Weak Match" / "Not Recommended"
 """
 
     # 构造用户消息: 把 JD 和候选人信息组织在一起

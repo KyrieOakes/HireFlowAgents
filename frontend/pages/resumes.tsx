@@ -32,6 +32,7 @@ export default function ResumesPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadPreview, setUploadPreview] = useState(""); // 上传后显示提取的文本预览
   const fileRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null); // 候选人列表区域引用, 用于滚动
 
   useEffect(() => { loadCandidates(); }, []);
 
@@ -58,18 +59,41 @@ export default function ResumesPage() {
     finally { setCreating(false); }
   }
 
-  // 上传 PDF/DOCX/TXT 文件 (后端自动提取文本)
+  // 上传 PDF/DOCX/TXT 文件 → 自动提取文本 → 自动解析 → 滚动到列表
   async function handleFileUpload() {
     if (!uploadFile) return;
     setUploading(true);
     setError(null);
     try {
+      // Step 1: 上传文件, 后端提取文本
       const result = await uploadResumeFile(uploadFile, name.trim() || undefined);
-      // 显示提取的文本预览
+      const newCandidateId = result.candidate_id;
       setUploadPreview(result.text_preview);
       setUploadFile(null);
       setName(""); setFilename("");
+
+      // Step 2: 刷新候选人列表 (新候选人出现在列表中)
       await loadCandidates();
+
+      // Step 3: 自动触发解析 (按钮显示"解析中")
+      if (!parsingLock.current.has(newCandidateId)) {
+        parsingLock.current.add(newCandidateId);
+        setParsing((p) => ({ ...p, [newCandidateId]: true }));
+        try {
+          await parseResume(newCandidateId);
+          await loadCandidates(); // 解析完成后刷新, 显示"已解析"和技能标签
+        } catch (e: any) { /* 解析失败不阻塞, 用户可手动重试 */ }
+        finally {
+          parsingLock.current.delete(newCandidateId);
+          setParsing((p) => ({ ...p, [newCandidateId]: false }));
+        }
+      }
+
+      // Step 4: 滚动到候选人列表区域
+      setTimeout(() => {
+        listRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 200);
+
     } catch (e: any) { setError(e.message); }
     finally { setUploading(false); }
   }
@@ -224,7 +248,7 @@ export default function ResumesPage() {
       {candidates.length === 0 ? (
         <EmptyState title="还没有候选人" description="在上方粘贴简历文本来录入第一个候选人" />
       ) : (
-        <div className="space-y-3">
+        <div ref={listRef} className="space-y-3">
           {candidates.map((c) => (
             <div key={c.candidate_id} className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between">
               <div>
