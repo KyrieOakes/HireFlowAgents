@@ -163,11 +163,18 @@ def update_candidate_profile(
     candidate = get_candidate(db, candidate_id)
     if candidate:
         candidate.profile_json = profile
-        # 保护自动命名的申请人: 如果名字以"申请人"开头 (系统自动生成),
-        # 说明原始简历中没有真实姓名, 不要被 LLM 从简历中提取的名字覆盖
+        # 更新名字逻辑:
+        # - 如果原名是"申请人*"(系统自动生成)且LLM提取到了真实姓名 → 更新
+        # - 如果原名是"申请人*"但LLM没提取到 → 保持自动命名
+        # - 如果原名不是自动生成的 → 保持原样(用户手动填的)
         is_auto_named = candidate.name and candidate.name.startswith("申请人")
-        if profile.get("name") and not is_auto_named:
-            candidate.name = profile["name"]
+        new_name = profile.get("name", "")
+        # LLM提取的名字是否看起来像真实人名 (不是空, 不是申请人模式)
+        is_real_name = bool(new_name) and not new_name.startswith("申请人")
+        if is_auto_named and is_real_name:
+            candidate.name = new_name
+        elif not is_auto_named and new_name:
+            candidate.name = new_name
         if profile.get("email"):
             candidate.email = profile["email"]
         db.commit()
