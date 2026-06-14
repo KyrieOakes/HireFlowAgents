@@ -8,12 +8,12 @@ HireFlow 模拟完整招聘筛选流程：JD 分析 → 简历解析 → 候选�
 
 **核心亮点:**
 - LangGraph 多 Agent 工作流编排
-- RAG 证据检索 (简历向量化 + Qdrant 语义搜索)
+- 两阶段排序: 关键词粗筛 + LLM 精排
 - 7 维度候选人评分体系
 - LLM 本地/云端双模式 (一键切换)
-- Human-in-the-loop 人工审核
-- PDF/DOCX 文件上传解析
+- PDF/DOCX 文件上传 + 自动解析
 - 评估体系 + 历史对比
+- Next.js 前端 (HR/ATS 工作台风格)
 
 ## 快速开始
 

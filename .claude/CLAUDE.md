@@ -115,6 +115,10 @@ uvicorn app.main:app --reload          # 启动 API 服务器 (开发模式)
 pytest                                  # 运行所有测试
 pytest tests/test_match_agent.py -v     # 运行单个测试文件
 
+# Frontend (Next.js)
+cd frontend && npm install              # 安装依赖 (首次)
+npm run dev                             # 启动 Next.js 开发服务器 → localhost:3000
+
 # Docker 一键启动所有服务
 docker-compose up -d                    # API + PostgreSQL + Qdrant
 docker-compose down                     # 停止所有服务
