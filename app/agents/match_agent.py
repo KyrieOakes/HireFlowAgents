@@ -205,21 +205,34 @@ async def batch_match_candidates(
         List[dict]: 所有候选人的匹配评分结果
     """
     import asyncio
+    from concurrent.futures import ThreadPoolExecutor
 
-    # 并行匹配所有候选人 (大幅提速: 5人串行60s → 并行~15s)
-    async def match_one(profile):
+    # 真正的并行: 用线程池执行 LLM 调用
+    # LangChain 的 async invoke() 底层是同步 HTTP, asyncio.gather 不会并行
+    # 用 ThreadPoolExecutor 实现多线程并发
+    def _sync_match(profile):
+        """同步执行单个匹配 (在线程中运行)"""
         candidate_id = profile.get("candidate_id", "unknown")
         evidence = None
         if evidence_by_candidate:
             evidence = evidence_by_candidate.get(candidate_id)
-        return await match_candidate(
-            jd_profile=jd_profile,
-            candidate_profile=profile,
-            evidence_list=evidence,
-            rubric=rubric,
-        )
+        # 在线程中创建新的事件循环运行 async 函数
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(
+                match_candidate(
+                    jd_profile=jd_profile,
+                    candidate_profile=profile,
+                    evidence_list=evidence,
+                    rubric=rubric,
+                )
+            )
+        finally:
+            loop.close()
 
-    results = await asyncio.gather(*[match_one(p) for p in candidate_profiles])
+    # 最多同时 5 个线程
+    with ThreadPoolExecutor(max_workers=min(len(candidate_profiles), 5)) as executor:
+        results = list(executor.map(_sync_match, candidate_profiles))
 
     # ---- 后处理: 强制翻译为中文 ----
     results = await _ensure_chinese_results(results)
