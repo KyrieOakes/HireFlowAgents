@@ -86,6 +86,23 @@ export async function parseResume(candidateId: string): Promise<{ candidate_id: 
   return request(`/resumes/${candidateId}/parse`, { method: "POST" });
 }
 
+/** 上传 PDF/DOCX/TXT 简历文件 (multipart) */
+export async function uploadResumeFile(
+  file: File,
+  name?: string,
+): Promise<{ candidate_id: string; name: string; filename: string; text_length: number; text_preview: string; message: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (name) formData.append("name", name);
+  const url = `${BASE_URL}/resumes/upload-file`;
+  const res = await fetch(url, { method: "POST", body: formData });
+  if (!res.ok) {
+    const detail = await res.json().then((d) => d.detail).catch(() => `${res.status}`);
+    throw new Error(typeof detail === "string" ? detail : "上传失败");
+  }
+  return res.json();
+}
+
 /** 获取候选人详情 */
 export async function getCandidate(candidateId: string): Promise<Candidate> {
   return request(`/resumes/${candidateId}`);

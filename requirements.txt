@@ -38,6 +38,7 @@ psycopg2-binary>=2.9              # PostgreSQL 驱动
 
 # --- 工具 ---
 python-dotenv>=1.0                # .env 文件加载
+python-multipart>=0.0.9            # FastAPI 文件上传支持
 
 # --- 评估与开发 ---
 jupyter>=1.0                      # Jupyter Notebook (评估报告)
