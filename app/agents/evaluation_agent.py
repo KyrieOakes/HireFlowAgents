@@ -91,47 +91,24 @@ risk_resolution 中的 reason 必须写中文。
         user_message=user_message + "\n\n【重要】用中文输出 JSON。strengths/concerns/summary 必须是中文。不要输出英文。",
     )
 
-    # 解析 JSON (4种策略提取)
+    # 解析 JSON (6种策略)
     from app.services.llm_service import parse_json_response
-    # 用 sentinel 对象检测解析是否成功
     _SENTINEL = object()
     parsed = parse_json_response(response, default=_SENTINEL)
     result = {} if parsed is _SENTINEL else parsed
 
-    # 解析失败: 用正则从原文提取字段值 (比清洗JSON更可读)
+    # 解析失败: 原文直接作 summary
     if parsed is _SENTINEL:
-        import re
+        # 打印到终端方便调试
+        print(f"\n[EVAL PARSE FAIL] LLM raw (first 300 chars): {response[:300]}\n")
         result["technical_depth_score"] = 5
         result["communication_score"] = 5
         result["problem_solving_score"] = 5
         result["risk_resolution"] = []
+        result["strengths"] = []
+        result["concerns"] = []
+        result["summary"] = (response or "解析失败")[:500]
         result["recommendation"] = "Hold"
-        # 尝试从原文提取字段
-        for field, pattern in [
-            ("summary", r'"summary"\s*:\s*"([^"]+)"'),
-            ("summary2", r'summary\s*:\s*([^\n]+)'),
-        ]:
-            m = re.search(pattern, response or "")
-            if m:
-                result["summary"] = m.group(1).strip()
-                break
-        # 提取 strengths 数组内容
-        m = re.search(r'"strengths"\s*:\s*\[(.*?)\]', response or "", re.DOTALL)
-        if m:
-            items = re.findall(r'"([^"]+)"', m.group(1))
-            result["strengths"] = items[:3] if items else []
-        else:
-            result["strengths"] = []
-        # 提取 concerns
-        m = re.search(r'"concerns"\s*:\s*\[(.*?)\]', response or "", re.DOTALL)
-        if m:
-            items = re.findall(r'"([^"]+)"', m.group(1))
-            result["concerns"] = items[:3] if items else []
-        else:
-            result["concerns"] = []
-        # summary 兜底
-        if not result.get("summary"):
-            result["summary"] = (response or "解析失败")[:300]
 
     # 强制字段 (安全锁)
     result["requires_human_review"] = True
