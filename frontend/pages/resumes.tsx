@@ -20,6 +20,7 @@ import JsonPanel from "@/components/JsonPanel";
 export default function ResumesPage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [filename, setFilename] = useState("");
@@ -49,12 +50,18 @@ export default function ResumesPage() {
     };
   }, [selected]);
 
-  async function loadCandidates() {
-    setLoading(true);
+  async function loadCandidates(options: { showPageLoading?: boolean } = {}) {
+    // 只有首次进入页面才使用整页加载；解析/删除后的刷新走后台同步，避免列表被卸载。
+    const showPageLoading = options.showPageLoading ?? candidates.length === 0;
+    if (showPageLoading) setLoading(true);
+    else setRefreshing(true);
     setError(null);
     try { setCandidates(await listCandidates()); }
     catch (e: any) { setError(e.message); }
-    finally { setLoading(false); }
+    finally {
+      if (showPageLoading) setLoading(false);
+      else setRefreshing(false);
+    }
   }
 
   // 上传简历 (无名时自动生成"候选人N")
@@ -67,7 +74,7 @@ export default function ResumesPage() {
       const displayName = name.trim() || `候选人${candidates.length + 1}`;
       await uploadResume(resumeText.trim(), displayName, filename.trim() || undefined);
       setName(""); setFilename(""); setResumeText("");
-      await loadCandidates();
+      await loadCandidates({ showPageLoading: false });
     } catch (e: any) { setError(e.message); }
     finally { setCreating(false); }
   }
@@ -86,15 +93,16 @@ export default function ResumesPage() {
       setName(""); setFilename("");
 
       // Step 2: 刷新候选人列表 (新候选人出现在列表中)
-      await loadCandidates();
+      await loadCandidates({ showPageLoading: false });
 
       // Step 3: 自动触发解析 (按钮显示"解析中")
       if (!parsingLock.current.has(newCandidateId)) {
         parsingLock.current.add(newCandidateId);
         setParsing((p) => ({ ...p, [newCandidateId]: true }));
         try {
-          await parseResume(newCandidateId);
-          await loadCandidates(); // 解析完成后刷新, 显示"已解析"和技能标签
+          const result = await parseResume(newCandidateId);
+          markCandidateParsed(newCandidateId, result.profile);
+          await loadCandidates({ showPageLoading: false }); // 后台刷新, 显示"已解析"和技能标签
         } catch (e: any) { /* 解析失败不阻塞, 用户可手动重试 */ }
         finally {
           parsingLock.current.delete(newCandidateId);
@@ -118,13 +126,29 @@ export default function ResumesPage() {
     setParsing((p) => ({ ...p, [candidateId]: true }));
     setError(null);
     try {
-      await parseResume(candidateId);
-      await loadCandidates();
+      const result = await parseResume(candidateId);
+      markCandidateParsed(candidateId, result.profile);
+      await loadCandidates({ showPageLoading: false });
     } catch (e: any) { setError(e.message); }
     finally {
       parsingLock.current.delete(candidateId);
       setParsing((p) => ({ ...p, [candidateId]: false }));
     }
+  }
+
+  // 解析成功后先就地更新当前卡片，避免等待整页刷新时出现白屏或交互中断。
+  function markCandidateParsed(candidateId: string, profile: CandidateProfile) {
+    setCandidates((items) =>
+      items.map((candidate) => {
+        if (candidate.candidate_id !== candidateId) return candidate;
+        return {
+          ...candidate,
+          email: profile.email || candidate.email,
+          has_profile: true,
+          profile,
+        };
+      }),
+    );
   }
 
   // 删除候选人
@@ -277,6 +301,11 @@ export default function ResumesPage() {
         <EmptyState title="还没有候选人" description="在上方粘贴简历文本来录入第一个候选人" />
       ) : (
         <div ref={listRef} className="grid gap-3">
+          {refreshing && (
+            <div className="rounded-lg border border-sky-100 bg-sky-50/70 px-3 py-2 text-xs text-sky-700">
+              后台同步中，当前操作不受影响...
+            </div>
+          )}
           {candidates.map((c) => (
             <div key={c.candidate_id} className="focus-card flex items-center justify-between p-4">
               <div>
