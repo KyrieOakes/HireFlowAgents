@@ -45,30 +45,34 @@
 - [x] 匹配进度计时器
 - [x] 姓名映射 (ID → 姓名)
 
+### Interview/Evaluation/Email Agent (Phase 1.2)
+- [x] Interview Agent: 4 类面试问题生成
+- [x] Evaluation Agent: 结构化面试评价 (requires_human_review=true)
+- [x] Email Agent: 4 类邮件草稿 (status=draft, requires_human_approval=true)
+- [x] 7 个新 API 端点
+- [x] 7 个 CRUD 函数
+
+### 测试体系
+- [x] 44 个测试 (0 failures): 7个Agent + CRUD + API + 端到端冒烟
+- [x] 4 层测试架构: mock LLM / SQLite CRUD / FastAPI TestClient / E2E
+
 ### 评估体系
-- [x] Jupyter Notebook: 5 Cell → 自动生成报告
+- [x] Jupyter Notebook: 8 Cell (含 3 个新 Agent 测试)
 - [x] run_eval.py: Precision@K / NDCG / Spearman ρ
 - [x] 历史对比: 最近5次趋势
 
 ## 待完成
 
-### Phase 1.2: 完善
-- [ ] PDF 批量处理 (data/resumes/ 目录批量上传)
-- [ ] RAG 证据在匹配中实际使用
-- [ ] 多岗位并行匹配
-- [ ] Interview Agent 实现
-- [ ] Evaluation Agent 实现
-- [ ] Email Agent 实现
-
 ### Phase 1.3: 质量提升
 - [ ] Ground Truth 人工标注
-- [ ] CI/CD 自动评估
-- [ ] Claude API 集成 (提速)
+- [ ] 前端面试/评价/邮件页面
+- [ ] Claude API 集成
 - [ ] 匹配缓存
 - [ ] 结果导出 (PDF/Excel)
+- [ ] CI/CD 自动评估
 
 ## 已知限制
 - 本地 hermes-3 输出中文不稳定 (已加后处理翻译)
-- 大候选池 (>100人) 时匹配耗时较长 (已加两阶段缓解)
-- 无匹配缓存: 同样 JD+候选人重新匹配会重复 LLM 调用
-- Embedding 检索暂未在匹配流程中使用
+- 大候选池 (>100人) 时匹配耗时较长 (已加两阶段+并行缓解)
+- 无匹配缓存
+- Workflow HITL 路径未实测

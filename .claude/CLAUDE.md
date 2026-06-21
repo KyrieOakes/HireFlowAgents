@@ -207,6 +207,36 @@ api_key = os.getenv("OPENAI_API_KEY", "sk-default-key")
   3. 详细改动列表 (文件 + 说明)
   4. 下一步计划
 
+### 测试规则
+
+所有代码必须写测试。测试分为四层，每层独立跑通。
+
+**Layer 1: Agent 单元测试 (mock LLM)**
+- 每个 Agent 至少 3 个测试: 正常输出 / JSON回退 / 提示词构造
+- Mock `call_llm` / `call_llm_structured`: `with patch("path.call_llm") as mock: mock.return_value = "预设"`
+- 不调真实 LLM, 零外部依赖
+
+**Layer 2: CRUD 集成测试 (SQLite 内存库)**
+- `create_engine("sqlite:///:memory:")` + 事务回滚隔离
+- 每个测试独立 session, 不相互影响
+
+**Layer 3: API 集成测试 (FastAPI TestClient)**
+- 文件临时库 (`sqlite:///tmp/hireflow_test.db`) 解决 SQLite 线程隔离
+- `app.dependency_overrides[get_db]` 替换数据库依赖
+
+**Layer 4: 端到端冒烟测试**
+- 完整 7 步链路: JD→简历→匹配→面试→评价→邮件
+- 验证路由可达 + 数据流转 + 字段存在
+
+**运行:**
+```bash
+pytest tests/                    # 全量 (44 tests, 0 failures)
+pytest tests/ -v                 # 详细
+pytest tests/test_jd_agent.py    # 单个
+```
+
+**新增测试必须写入独立开发日志** (命名: `测试-功能名-YYYY-M-D.md`)，方便面试时讲解参数和指标。
+
 <!-- CODEGRAPH_START -->
 ## CodeGraph
 
