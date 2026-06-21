@@ -44,3 +44,7 @@ python-multipart>=0.0.9            # FastAPI 文件上传支持
 jupyter>=1.0                      # Jupyter Notebook (评估报告)
 ipykernel>=6.0                    # Jupyter Kernel (conda 环境注册)
 pytz>=2024.1                      # 时区支持 (评估报告时间戳)
+
+# --- 测试 ---
+pytest>=8.0                       # 测试框架 (44 tests)
+httpx>=0.27.0                     # FastAPI TestClient 依赖 (API 集成测试)
