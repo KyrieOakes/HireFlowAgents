@@ -33,17 +33,14 @@ export default function JobsPage() {
   // 加载岗位列表
   useEffect(() => { loadJobs(); }, []);
 
-  // 打开岗位详情弹窗时锁住页面滚动，避免从长列表底部打开后弹窗位置不明显。
+  // 打开岗位详情弹窗时支持 Esc 关闭；滚动交给弹层遮罩自身处理，避免页面被锁死。
   useEffect(() => {
     if (!selectedJob) return;
-    const originalOverflow = document.body.style.overflow;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setSelectedJob(null);
     };
-    document.body.style.overflow = "hidden";
     window.addEventListener("keydown", closeOnEscape);
     return () => {
-      document.body.style.overflow = originalOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [selectedJob]);
@@ -228,8 +225,8 @@ export default function JobsPage() {
 
       {/* ---- 岗位详情弹层 ---- */}
       {selectedJob && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-sm" onClick={() => setSelectedJob(null)}>
-          <div className="glass-panel soft-pop max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/35 px-4 py-20 backdrop-blur-sm sm:py-24" onClick={() => setSelectedJob(null)}>
+          <div className="glass-panel soft-pop mx-auto w-full max-w-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
             {/* 标题栏 */}
             <div className="sticky top-0 flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur">
               <h3 className="font-semibold text-slate-900">{selectedJob.title || "岗位详情"}</h3>
