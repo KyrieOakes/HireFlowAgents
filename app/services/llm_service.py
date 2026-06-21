@@ -149,6 +149,17 @@ def parse_json_response(raw: str, default: dict = None) -> dict:
 
     text = raw.strip()
 
+    # 预处理: 修复 Unicode 转义 (你 → 你, \uXXXX)
+    # LLM 可能输出不规范的 Unicode 转义 (大小写混合, 不完整等)
+    def _fix_unicode(m):
+        try:
+            return chr(int(m.group(1), 16))
+        except (ValueError, OverflowError):
+            return m.group(0)  # 无效转义保留原文
+    text = re.sub(r'\\u([0-9a-fA-F]{4})', _fix_unicode, text)
+    # 也处理大写 U 的 \UXXXXXXXX 格式
+    text = re.sub(r'\\U([0-9a-fA-F]{8})', _fix_unicode, text)
+
     # 策略 1: 直接解析
     try:
         return json.loads(text)
