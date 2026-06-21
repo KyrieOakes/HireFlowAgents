@@ -259,8 +259,8 @@ class InterviewQuestion(Base):
     __tablename__ = "interview_questions"
 
     question_id = Column(String, primary_key=True, default=_gen_id)
-    job_id = Column(String, ForeignKey("jobs.job_id"), nullable=False)
-    candidate_id = Column(String, ForeignKey("candidates.candidate_id"), nullable=False)
+    job_id = Column(String, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False)
+    candidate_id = Column(String, ForeignKey("candidates.candidate_id", ondelete="CASCADE"), nullable=False)
     question_type = Column(String, nullable=True)
     question = Column(Text, nullable=True)
     purpose = Column(Text, nullable=True)
@@ -272,8 +272,8 @@ class InterviewEvaluation(Base):
     __tablename__ = "interview_evaluations"
 
     evaluation_id = Column(String, primary_key=True, default=_gen_id)
-    candidate_id = Column(String, ForeignKey("candidates.candidate_id"), nullable=False)
-    job_id = Column(String, ForeignKey("jobs.job_id"), nullable=False)
+    candidate_id = Column(String, ForeignKey("candidates.candidate_id", ondelete="CASCADE"), nullable=False)
+    job_id = Column(String, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False)
     feedback_text = Column(Text, nullable=True)
     evaluation_json = Column(JSON, nullable=True)
     final_recommendation = Column(String, nullable=True)
@@ -285,8 +285,8 @@ class EmailDraft(Base):
     __tablename__ = "email_drafts"
 
     email_id = Column(String, primary_key=True, default=_gen_id)
-    candidate_id = Column(String, ForeignKey("candidates.candidate_id"), nullable=False)
-    job_id = Column(String, ForeignKey("jobs.job_id"), nullable=False)
+    candidate_id = Column(String, ForeignKey("candidates.candidate_id", ondelete="CASCADE"), nullable=False)
+    job_id = Column(String, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False)
     email_type = Column(String, nullable=True)
     subject = Column(String, nullable=True)
     body = Column(Text, nullable=True)
