@@ -105,11 +105,11 @@ async def resume_workflow(
     }
 
     try:
-        # 从 checkpoint 恢复, 传入人工输入
+        # LangGraph 标准 resume: 用 Command(resume=human_input) 从中断点继续
+        from langgraph.types import Command
         result = await workflow.ainvoke(
-            None,  # None = 从中断点继续
-            {**thread_config, "configurable": {"thread_id": thread_id}},
-            human_input,
+            Command(resume=human_input),
+            thread_config,
         )
         return {
             "status": result.get("human_review_status", "unknown"),

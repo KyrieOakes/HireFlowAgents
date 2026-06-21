@@ -176,6 +176,54 @@ def search_evidence_for_match(
     return all_evidence[:top_k]
 
 
+def index_resume_text(
+    resume_text: str,
+    candidate_id: str,
+    source: str = "text_upload",
+) -> List[str]:
+    """
+    索引简历文本 (不需要文件, 直接用文本)。
+
+    用于 API 上传/粘贴简历文本后的索引:
+    切分 → Embedding → Qdrant 存储。
+
+    参数:
+        resume_text: 简历纯文本
+        candidate_id: 候选人ID
+        source: 来源标记
+    返回:
+        List[str]: Qdrant point ID 列表
+    """
+    from langchain_core.documents import Document
+
+    # 构造一个虚拟 Document (无文件路径)
+    doc = Document(page_content=resume_text, metadata={"source": source})
+    chunks = chunk_documents([doc])
+
+    if not chunks:
+        return []
+
+    chunk_texts = [c.page_content for c in chunks]
+    embeddings = generate_embeddings(chunk_texts)
+
+    metadata_list = [
+        {"candidate_id": candidate_id, "source": source, "page": 0}
+        for _ in chunks
+    ]
+
+    init_collection(RESUME_COLLECTION)
+
+    import uuid
+    point_ids = [str(uuid.uuid4()) for _ in chunks]
+    return store_chunks(
+        chunks=chunk_texts,
+        embeddings=embeddings,
+        metadata_list=metadata_list,
+        collection_name=RESUME_COLLECTION,
+        point_ids=point_ids,
+    )
+
+
 def _build_queries_from_jd(jd_profile: Dict[str, Any]) -> List[str]:
     """
     从 JD profile 中构造检索查询词。

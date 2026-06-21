@@ -227,6 +227,24 @@ async def parse_resume_endpoint(
 
     crud.update_candidate_profile(db, candidate_id, profile)
 
+    # ---- RAG 索引: 切分简历 → Embedding → Qdrant ----
+    from app.services.rag_service import index_resume_text
+    try:
+        point_ids = index_resume_text(
+            resume_text=candidate.resume_text,
+            candidate_id=candidate_id,
+            source="resume_parse",
+        )
+        # 保存 chunk → Qdrant point 映射到数据库
+        from app.services.document_loader import chunk_documents
+        from langchain_core.documents import Document
+        doc = Document(page_content=candidate.resume_text, metadata={"source": "resume_parse"})
+        chunks = chunk_documents([doc])
+        crud.save_resume_chunks(db, candidate_id, chunks, point_ids)
+    except Exception:
+        # 索引失败不阻塞解析流程
+        pass
+
     return {
         "candidate_id": candidate_id,
         "profile": profile,

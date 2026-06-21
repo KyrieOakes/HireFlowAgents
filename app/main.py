@@ -80,6 +80,8 @@ app.include_router(jobs.router)
 app.include_router(resumes.router)
 app.include_router(matching.router)
 app.include_router(workflow.router)
+app.include_router(interview.router)
+app.include_router(evaluation.router)
 
 
 # ================================================================
