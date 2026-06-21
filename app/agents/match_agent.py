@@ -19,10 +19,34 @@ Match Agent: 候选人匹配评分 Agent。
 - 风险扣分: -10 分
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from app.services.llm_service import call_llm_structured
 from app.schemas.match_schema import MatchResult, DimensionScores
 from app.utils.config import settings
+
+
+def _clip_text(value: Any, limit: int = 220) -> str:
+    """
+    截断给 LLM 的长文本。
+
+    匹配接口一次会处理多个候选人，如果把完整项目描述、RAG 证据全塞进去，
+    本地模型很容易输出到 max_tokens 上限，导致结构化解析失败。
+    """
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _take_list(values: Any, limit: int = 8) -> List[Any]:
+    """
+    安全地截取列表。
+
+    LLM 只需要看到最关键的信息，不需要完整简历全文。
+    """
+    if not isinstance(values, list):
+        return []
+    return values[:limit]
 
 
 async def match_candidate(
@@ -78,6 +102,8 @@ async def match_candidate(
 - 每个分数给出理由(strengths/risks中)
 - 有evidence必须引用
 - 不编造信息
+- 输出必须简洁: strengths最多3条, risks最多3条, evidence最多3条, summary不超过60字
+- 不要复述完整简历, 不要输出长段落
 - 推荐等级: >=80→"Strong Match", 65-79→"Medium Match", 50-64→"Weak Match", <50→"Not Recommended"
 """
 
@@ -89,18 +115,27 @@ async def match_candidate(
         rubric=rubric,
     )
 
-    # 调用 LLM 进行结构化评分
-    match_result = call_llm_structured(
-        system_prompt=system_prompt,
-        user_message=user_message,
-        output_schema=MatchResult,
-    )
+    try:
+        # 调用 LLM 进行结构化评分
+        match_result = call_llm_structured(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            output_schema=MatchResult,
+        )
 
-    # 转为字典，并确保使用传入的 candidate_id
-    from app.services.llm_service import _fix_unicode_strings
-    result_dict = _fix_unicode_strings(match_result.model_dump())
-    result_dict["candidate_id"] = candidate_profile.get("candidate_id", "unknown")
-    return result_dict
+        # 转为字典，并确保使用传入的 candidate_id
+        from app.services.llm_service import _fix_unicode_strings
+        result_dict = _fix_unicode_strings(match_result.model_dump())
+        result_dict["candidate_id"] = candidate_profile.get("candidate_id", "unknown")
+        return result_dict
+    except Exception as exc:
+        # 单个候选人 LLM 评分失败时，不能让整个 Top 5 匹配接口 500。
+        # 这里返回可解释的规则兜底结果，前端仍能完成排序和面试流程。
+        return _fallback_match_result(
+            jd_profile=jd_profile,
+            candidate_profile=candidate_profile,
+            error=str(exc),
+        )
 
 
 def _build_match_prompt(
@@ -141,34 +176,38 @@ def _build_match_prompt(
     lines.append("=" * 50)
     lines.append("岗位要求 (JD):")
     lines.append(f"  岗位名称: {jd_profile.get('job_title', '未指定')}")
-    lines.append(f"  必备技能: {', '.join(jd_profile.get('required_skills', []))}")
-    lines.append(f"  加分技能: {', '.join(jd_profile.get('preferred_skills', []))}")
-    lines.append(f"  岗位职责: {', '.join(jd_profile.get('responsibilities', []))}")
-    lines.append(f"  学历要求: {', '.join(jd_profile.get('education_requirements', []))}")
-    lines.append(f"  经验要求: {jd_profile.get('experience_requirements', '未指定')}")
-    lines.append(f"  技术要求: {', '.join(jd_profile.get('technical_requirements', []))}")
-    lines.append(f"  软技能: {', '.join(jd_profile.get('soft_skills', []))}")
+    lines.append(f"  必备技能: {', '.join(_take_list(jd_profile.get('required_skills', []), 12))}")
+    lines.append(f"  加分技能: {', '.join(_take_list(jd_profile.get('preferred_skills', []), 8))}")
+    lines.append(f"  岗位职责: {', '.join(_take_list(jd_profile.get('responsibilities', []), 6))}")
+    lines.append(f"  学历要求: {', '.join(_take_list(jd_profile.get('education_requirements', []), 4))}")
+    lines.append(f"  经验要求: {_clip_text(jd_profile.get('experience_requirements', '未指定'), 80)}")
+    lines.append(f"  技术要求: {', '.join(_take_list(jd_profile.get('technical_requirements', []), 10))}")
+    lines.append(f"  软技能: {', '.join(_take_list(jd_profile.get('soft_skills', []), 5))}")
 
     # 候选人信息
     lines.append("")
     lines.append("=" * 50)
     lines.append("候选人信息:")
     lines.append(f"  姓名: {candidate_profile.get('name', '未知')}")
-    lines.append(f"  技能: {', '.join(candidate_profile.get('skills', []))}")
+    lines.append(f"  技能: {', '.join(_take_list(candidate_profile.get('skills', []), 24))}")
 
     if candidate_profile.get('education'):
         lines.append("  教育:")
-        for edu in candidate_profile['education']:
+        for edu in _take_list(candidate_profile['education'], 3):
             lines.append(f"    - {edu.get('degree', '')} {edu.get('major', '')} @ {edu.get('school', '')}")
 
     if candidate_profile.get('projects'):
         lines.append("  项目:")
-        for proj in candidate_profile['projects']:
-            lines.append(f"    - {proj.get('name', '')}: {proj.get('description', '')}")
+        for proj in _take_list(candidate_profile['projects'], 4):
+            technologies = ", ".join(_take_list(proj.get("technologies", []), 8))
+            lines.append(
+                f"    - {proj.get('name', '')}: {_clip_text(proj.get('description', ''), 220)}"
+                f" 技术: {technologies}"
+            )
 
     if candidate_profile.get('work_experience'):
         lines.append("  工作经历:")
-        for exp in candidate_profile['work_experience']:
+        for exp in _take_list(candidate_profile['work_experience'], 3):
             lines.append(f"    - {exp.get('title', '')} @ {exp.get('company', '')} ({exp.get('duration', '')})")
 
     lines.append(f"  估计经验年限: {candidate_profile.get('estimated_years_of_experience', '未知')}")
@@ -178,14 +217,107 @@ def _build_match_prompt(
         lines.append("")
         lines.append("=" * 50)
         lines.append("来自简历的RAG证据 (请引用这些证据支撑你的评分):")
-        for i, ev in enumerate(evidence_list):
-            lines.append(f"  证据{i+1}: {ev.get('text', '')}")
+        for i, ev in enumerate(_take_list(evidence_list, 3)):
+            lines.append(f"  证据{i+1}: {_clip_text(ev.get('text', ''), 260)}")
             lines.append(f"    来源: {ev.get('source', '未知')}")
 
     lines.append("")
-    lines.append("请根据以上信息，对候选人在每个维度上打分。")
+    lines.append("请根据以上信息，对候选人在每个维度上打分，并保持输出简洁。")
 
     return "\n".join(lines)
+
+
+def _score_skill_overlap(required: List[str], candidate_skills: List[str], max_score: float) -> float:
+    """
+    根据技能重合度给一个规则分。
+
+    这是 LLM 失败时的兜底，不追求完美，只保证系统不中断且分数可解释。
+    """
+    if not required:
+        return max_score * 0.5
+    normalized_skills = " ".join(candidate_skills).lower()
+    matched = sum(1 for skill in required if str(skill).lower() in normalized_skills)
+    return round(max_score * matched / max(len(required), 1), 1)
+
+
+def _estimate_years(candidate_profile: Dict[str, Any]) -> float:
+    """
+    读取候选人经验年限。
+
+    如果解析结果没有年限，就用 0 作为保守估计。
+    """
+    try:
+        return float(candidate_profile.get("estimated_years_of_experience") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _recommendation_from_score(score: float) -> str:
+    """根据总分生成推荐等级。"""
+    if score >= 80:
+        return "Strong Match"
+    if score >= 65:
+        return "Medium Match"
+    if score >= 50:
+        return "Weak Match"
+    return "Not Recommended"
+
+
+def _fallback_match_result(
+    jd_profile: Dict[str, Any],
+    candidate_profile: Dict[str, Any],
+    error: str,
+) -> Dict[str, Any]:
+    """
+    LLM 匹配失败时的规则兜底结果。
+
+    这样 Top 5 匹配不会因为某一个候选人的结构化输出被截断而整体失败。
+    """
+    candidate_skills = candidate_profile.get("skills", []) or []
+    required_skills = jd_profile.get("required_skills", []) or jd_profile.get("technical_requirements", []) or []
+    preferred_skills = jd_profile.get("preferred_skills", []) or []
+
+    technical = _score_skill_overlap(required_skills, candidate_skills, 30)
+    domain = _score_skill_overlap(preferred_skills, candidate_skills, 10)
+    has_projects = bool(candidate_profile.get("projects"))
+    has_education = bool(candidate_profile.get("education"))
+    years = _estimate_years(candidate_profile)
+
+    project_score = 12.0 if has_projects else 4.0
+    experience_score = min(15.0, round(years * 5, 1)) if years else (6.0 if has_projects else 3.0)
+    education_score = 8.0 if has_education else 3.0
+    communication_score = 3.0
+    risk_penalty = -6.0
+
+    total = round(
+        technical + project_score + experience_score + education_score + domain + communication_score + risk_penalty,
+        1,
+    )
+    total = max(0.0, min(100.0, total))
+
+    return {
+        "candidate_id": candidate_profile.get("candidate_id", "unknown"),
+        "total_score": total,
+        "dimension_scores": {
+            "technical_skills": technical,
+            "project_relevance": project_score,
+            "experience": experience_score,
+            "education": education_score,
+            "domain_relevance": domain,
+            "communication": communication_score,
+            "risk_penalty": risk_penalty,
+        },
+        "strengths": [
+            "系统已根据结构化简历和岗位技能重合度生成兜底评分。",
+        ],
+        "risks": [
+            "LLM 精排输出过长或解析失败，本条结果为规则兜底评分。",
+            _clip_text(error, 120),
+        ],
+        "evidence": [],
+        "recommendation": _recommendation_from_score(total),
+        "summary": "LLM 精排失败，已使用规则兜底评分，建议人工复核。",
+    }
 
 
 async def batch_match_candidates(

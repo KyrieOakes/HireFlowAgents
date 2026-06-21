@@ -72,3 +72,58 @@ def test_batch_match():
             )
         assert len(results) == 2
     asyncio.run(run())
+
+
+def test_match_candidate_fallback_when_llm_output_is_truncated():
+    """验证 LLM 输出被截断时，匹配接口返回兜底评分而不是抛 500。"""
+    async def run():
+        from app.agents.match_agent import match_candidate
+
+        with patch("app.agents.match_agent.call_llm_structured") as mock:
+            mock.side_effect = Exception("LengthFinishReasonError: response content reached length limit")
+            result = await match_candidate(
+                jd_profile={
+                    "job_title": "AI 产品助理",
+                    "required_skills": ["RAG", "LangGraph", "FastAPI"],
+                    "preferred_skills": ["Docker"],
+                },
+                candidate_profile={
+                    "candidate_id": "C001",
+                    "name": "范瑞杰",
+                    "skills": ["RAG", "LangGraph", "FastAPI", "Docker"],
+                    "projects": [{"name": "HireFlowAgents"}],
+                    "education": [{"degree": "硕士", "school": "悉尼科技大学", "major": "人工智能"}],
+                },
+            )
+
+        assert result["candidate_id"] == "C001"
+        assert result["total_score"] > 0
+        assert result["recommendation"] in {"Strong Match", "Medium Match", "Weak Match", "Not Recommended"}
+        assert "兜底评分" in result["summary"]
+        assert any("LLM" in risk for risk in result["risks"])
+    asyncio.run(run())
+
+
+def test_build_match_prompt_limits_long_resume_content():
+    """验证匹配 prompt 会截断长项目和证据，降低本地模型输出过长风险。"""
+    from app.agents.match_agent import _build_match_prompt
+
+    long_text = "项目描述" * 200
+    prompt = _build_match_prompt(
+        jd_profile={
+            "job_title": "AI 产品助理",
+            "required_skills": ["RAG"] * 20,
+            "preferred_skills": ["Docker"] * 20,
+            "responsibilities": ["负责 AI 应用"] * 20,
+        },
+        candidate_profile={
+            "candidate_id": "C001",
+            "name": "范瑞杰",
+            "skills": ["RAG"] * 50,
+            "projects": [{"name": "长项目", "description": long_text, "technologies": ["RAG"]}],
+        },
+        evidence_list=[{"text": long_text, "source": "resume"} for _ in range(8)],
+    )
+
+    assert len(prompt) < 3500
+    assert "..." in prompt
