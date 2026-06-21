@@ -57,6 +57,38 @@ def _get_llm() -> ChatOpenAI:
     return ChatOpenAI(**kwargs)
 
 
+def _fix_unicode_strings(obj: Any) -> Any:
+    """
+    递归修复对象中所有字符串的 Unicode 转义。
+
+    LLM 可能返回不规范 Unicode (\\u00e4, 大小写混合, 不完整代理对等),
+    这个函数递归遍历 dict/list/str, 把所有字符串里的 \\uXXXX 转为实际字符。
+    """
+    import re
+
+    def _fix_str(s: str) -> str:
+        def _replace(m):
+            try:
+                code = int(m.group(1), 16)
+                # 过滤无效代理对 (U+D800-U+DFFF)
+                if 0xD800 <= code <= 0xDFFF:
+                    return m.group(0)
+                return chr(code)
+            except (ValueError, OverflowError):
+                return m.group(0)
+        return re.sub(r'\\u([0-9a-fA-F]{4})', _replace, s)
+
+    if isinstance(obj, str):
+        return _fix_str(obj)
+    elif isinstance(obj, dict):
+        return {k: _fix_unicode_strings(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_fix_unicode_strings(item) for item in obj]
+    elif hasattr(obj, 'model_dump'):  # Pydantic 对象
+        return _fix_unicode_strings(obj.model_dump())
+    return obj
+
+
 def call_llm(
     system_prompt: str,
     user_message: str,
@@ -117,7 +149,9 @@ def call_llm_structured(
         HumanMessage(content=user_message),
     ]
 
-    return structured_llm.invoke(messages)
+    result = structured_llm.invoke(messages)
+    # 后处理: 修复 LLM 返回的不规范 Unicode 转义
+    return _fix_unicode_strings(result)
 
 
 # ================================================================
