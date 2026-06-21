@@ -95,6 +95,7 @@ def store_chunks(
     embeddings: List[List[float]],
     metadata_list: List[Dict[str, Any]],
     collection_name: str,
+    point_ids: List[str] | None = None,  # 可选: 外部生成的ID, 用于关联DB
 ):
     """
     将文本 chunks 和它们的 embedding 存入 Qdrant。
@@ -107,8 +108,11 @@ def store_chunks(
     参数:
         chunks: 原始文本块列表
         embeddings: 每个文本块对应的向量
-        metadata_list: 每个文本块的元数据，列表长度需和 chunks 一致
+        metadata_list: 每个文本块的元数据
         collection_name: 存入哪个集合
+        point_ids: 可选, 外部生成的point ID列表 (用于与DB记录关联)
+    返回:
+        List[str]: 实际使用的 point ID 列表
     """
     from langchain_core.documents import Document
 
@@ -131,9 +135,9 @@ def store_chunks(
     # 简化方案: 直接用底层 client 的 upsert
     client = _get_qdrant_client()
 
-    # 生成唯一 ID 列表
+    # 生成唯一 ID 列表 (如果外部传入了 point_ids 则使用外部ID)
     import uuid
-    ids = [str(uuid.uuid4()) for _ in documents]
+    ids = point_ids if point_ids else [str(uuid.uuid4()) for _ in documents]
 
     # 手动 upsert: 同时插入向量 + payload
     client.upsert(
@@ -150,6 +154,8 @@ def store_chunks(
             for i in range(len(documents))
         ],
     )
+
+    return ids  # 返回实际使用的 point ID 列表
 
 
 def search_similar(

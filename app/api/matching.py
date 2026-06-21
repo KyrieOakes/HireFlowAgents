@@ -89,12 +89,30 @@ async def run_matching(
 
     matched_count = len(candidate_profiles)
 
-    # Step 3: 匹配评分
+    # Step 3: RAG 证据检索 (为每个候选人检索简历证据)
+    from app.services.rag_service import search_evidence_for_match
+
+    evidence_by_candidate = {}
+    for c in candidate_profiles:
+        cid = c.get("candidate_id", "")
+        if cid:
+            try:
+                evidence_by_candidate[cid] = search_evidence_for_match(
+                    jd_profile=jd_profile,
+                    candidate_id=cid,
+                    top_k=5,
+                )
+            except Exception:
+                # 检索失败不阻塞流程, 该候选人无证据
+                evidence_by_candidate[cid] = []
+
+    # Step 4: 匹配评分 (传入 RAG 证据)
     rubric = job.rubric_json or jd_profile.get("rubric")
 
     match_results = await batch_match_candidates(
         jd_profile=jd_profile,
         candidate_profiles=candidate_profiles,
+        evidence_by_candidate=evidence_by_candidate,
         rubric=rubric,
     )
 

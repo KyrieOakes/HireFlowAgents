@@ -83,18 +83,18 @@ def index_resume(
     # Step 6: 确保集合存在
     init_collection(RESUME_COLLECTION)
 
-    # Step 7: 存入 Qdrant
-    # store_chunks 内部会生成 UUID 作为 point ID
+    # Step 7: 存入 Qdrant (传入预生成的 ID, store_chunks 返回实际使用的 ID)
     import uuid
     point_ids = [str(uuid.uuid4()) for _ in chunks]
-    store_chunks(
+    actual_ids = store_chunks(
         chunks=chunk_texts,
         embeddings=embeddings,
         metadata_list=metadata_list,
         collection_name=RESUME_COLLECTION,
+        point_ids=point_ids,  # 传入外部ID, store会用它们而非重新生成
     )
 
-    return point_ids
+    return actual_ids  # 返回实际写入的ID (与传入的一致)
 
 
 def search_evidence(
