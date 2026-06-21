@@ -322,12 +322,21 @@ def get_match_result(
 
 def delete_job(db: Session, job_id: str) -> bool:
     """
-    删除岗位及其关联的匹配结果。
-    返回 True 表示删除成功, False 表示岗位不存在。
+    删除岗位及其关联的所有记录。
     """
     job = get_job(db, job_id)
     if not job:
         return False
+    # 手动清理 interview/evaluation/email 表 (job_id 外键)
+    db.query(models.InterviewQuestion).filter(
+        models.InterviewQuestion.job_id == job_id
+    ).delete()
+    db.query(models.InterviewEvaluation).filter(
+        models.InterviewEvaluation.job_id == job_id
+    ).delete()
+    db.query(models.EmailDraft).filter(
+        models.EmailDraft.job_id == job_id
+    ).delete()
     db.delete(job)
     db.commit()
     return True
@@ -335,12 +344,25 @@ def delete_job(db: Session, job_id: str) -> bool:
 
 def delete_candidate(db: Session, candidate_id: str) -> bool:
     """
-    删除候选人及其关联的简历chunk和匹配结果。
-    返回 True 表示删除成功, False 表示不存在。
+    删除候选人及其关联的所有记录。
+
+    先手动清理子表 (面试/评价/邮件), 再删候选人。
+    SQLAlchemy cascade 只对已配置 relationship 的表生效,
+    新增的 interview_questions 等表需要显式删除。
     """
     candidate = get_candidate(db, candidate_id)
     if not candidate:
         return False
+    # 手动清理关联表 (这些表没有在 Candidate model 中配置 relationship+cascade)
+    db.query(models.InterviewQuestion).filter(
+        models.InterviewQuestion.candidate_id == candidate_id
+    ).delete()
+    db.query(models.InterviewEvaluation).filter(
+        models.InterviewEvaluation.candidate_id == candidate_id
+    ).delete()
+    db.query(models.EmailDraft).filter(
+        models.EmailDraft.candidate_id == candidate_id
+    ).delete()
     db.delete(candidate)
     db.commit()
     return True
