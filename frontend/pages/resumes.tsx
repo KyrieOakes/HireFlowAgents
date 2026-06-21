@@ -37,6 +37,16 @@ export default function ResumesPage() {
 
   useEffect(() => { loadCandidates(); }, []);
 
+  // 打开详情弹窗时锁住页面滚动，避免弹窗出现后页面还停在长列表的滚动位置。
+  useEffect(() => {
+    if (!selected) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [selected]);
+
   async function loadCandidates() {
     setLoading(true);
     setError(null);
@@ -304,8 +314,8 @@ export default function ResumesPage() {
 
       {/* ---- 候选人详情弹层 ---- */}
       {selected && (
-        <div className="fixed inset-0 z-20 flex items-start justify-center bg-slate-950/35 px-4 pt-20 backdrop-blur-sm" onClick={() => setSelected(null)}>
-          <div className="glass-panel soft-pop max-h-[80vh] w-full max-w-2xl overflow-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-sm" onClick={() => setSelected(null)}>
+          <div className="glass-panel soft-pop max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-auto" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur">
               <h3 className="font-semibold text-slate-900">{selected.name || "候选人详情"}</h3>
               <button onClick={() => setSelected(null)} className="text-lg text-slate-400 transition hover:text-slate-700">×</button>
