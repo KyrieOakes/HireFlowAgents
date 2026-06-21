@@ -118,3 +118,69 @@ def call_llm_structured(
     ]
 
     return structured_llm.invoke(messages)
+
+
+# ================================================================
+# JSON 解析工具: 健壮地从 LLM 响应中提取 JSON
+# ================================================================
+
+def parse_json_response(raw: str, default: dict = None) -> dict:
+    """
+    从 LLM 自由文本响应中提取 JSON 对象。
+
+    LLM 可能返回:
+    - 纯 JSON: {"key": "value"}
+    - Markdown 代码块: ```json\n{...}\n```
+    - 带前缀文本: 好的，这是结果: {...}
+    - 嵌套在文字中
+
+    这个函数尝试多种策略提取 JSON, 比直接 json.loads() 更健壮。
+
+    参数:
+        raw: LLM 原始响应文本
+        default: 解析全部失败时的默认值
+    返回:
+        dict: 解析出的 JSON 对象
+    """
+    import json, re
+
+    if default is None:
+        default = {}
+
+    text = raw.strip()
+
+    # 策略 1: 直接解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 策略 2: 去掉 markdown 代码块标记
+    # ```json\n{...}\n``` 或 ```\n{...}\n```
+    cleaned = re.sub(r'^```(?:json)?\s*\n', '', text)
+    cleaned = re.sub(r'\n```\s*$', '', cleaned)
+    try:
+        return json.loads(cleaned.strip())
+    except json.JSONDecodeError:
+        pass
+
+    # 策略 3: 找第一个 { 和最后一个 } 之间的内容 (对象)
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1 and start < end:
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+
+    # 策略 4: 找第一个 [ 和最后一个 ] 之间的内容 (数组)
+    start = text.find('[')
+    end = text.rfind(']')
+    if start != -1 and end != -1 and start < end:
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+
+    # 全部失败, 返回默认值
+    return default

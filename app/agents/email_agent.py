@@ -114,21 +114,12 @@ async def generate_email_draft(
         user_message=user_message,
     )
 
-    # 解析 JSON
-    import json
-    try:
-        text = response.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        result = json.loads(text.strip())
-    except json.JSONDecodeError:
-        # 回退: 用原始文本作为 body
-        result = {
-            "subject": f"关于{job_title}岗位的通知",
-            "body": response,
-        }
+    # 解析 JSON (使用健壮的解析器)
+    from app.services.llm_service import parse_json_response
+    result = parse_json_response(response, default={
+        "subject": f"关于{job_title}岗位的通知",
+        "body": response,
+    })
 
     return {
         "email_type": email_type,

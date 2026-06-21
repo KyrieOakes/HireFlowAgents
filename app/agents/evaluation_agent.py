@@ -81,27 +81,21 @@ async def evaluate_candidate(
         user_message=user_message + "\n\n请输出 JSON, 不要加解释。",
     )
 
-    # 解析 JSON
-    import json
-    try:
-        text = response.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"): text = text[:-3]
-        result = json.loads(text.strip())
-    except json.JSONDecodeError:
-        result = {
-            "technical_depth_score": 5,
-            "communication_score": 5,
-            "problem_solving_score": 5,
-            "risk_resolution": [],
-            "strengths": ["面试反馈信息不足, 无法充分评估"],
-            "concerns": ["面试反馈信息不足"],
-            "summary": "面试反馈不足, 请补充更详细的面试记录",
-            "recommendation": "Hold",
-        }
+    # 解析 JSON (使用健壮的解析器, 3种策略提取)
+    from app.services.llm_service import parse_json_response
+    fallback = {
+        "technical_depth_score": 5,
+        "communication_score": 5,
+        "problem_solving_score": 5,
+        "risk_resolution": [],
+        "strengths": ["解析失败, 请重试"],
+        "concerns": ["LLM 返回格式异常"],
+        "summary": "评价解析失败, 请重试或补充更多面试反馈",
+        "recommendation": "Hold",
+    }
+    result = parse_json_response(response, default=fallback)
 
-    # 强制字段
+    # 强制字段 (安全锁)
     result["requires_human_review"] = True
     if "recommendation" not in result:
         result["recommendation"] = "Hold"

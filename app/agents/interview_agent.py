@@ -102,21 +102,12 @@ question_type 字段: 英文枚举值
         user_message=user_message + "\n\n只返回 JSON 数组, 不要加解释。",
     )
 
-    # 解析 JSON 响应
-    import json
-    try:
-        # 清理可能的 markdown 标记
-        text = response.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-        questions = json.loads(text)
-        if isinstance(questions, dict):
-            questions = [questions]
-    except json.JSONDecodeError:
+    # 解析 JSON (使用健壮的解析器)
+    from app.services.llm_service import parse_json_response
+    questions = parse_json_response(response, default=[])
+    if isinstance(questions, dict):
+        questions = [questions]
+    if not isinstance(questions, list) or len(questions) == 0:
         # 回退: 返回一个简单的问题
         questions = [{
             "question_type": "technical",
