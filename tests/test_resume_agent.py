@@ -77,3 +77,70 @@ def test_empty_resume_handling():
         assert result["skills"] == []
         assert result["name"] == ""
     asyncio.run(run())
+
+
+def test_parse_resume_cleans_corrupted_llm_output():
+    """验证 LLM 输出乱码时，系统会用简历原文兜底关键字段。"""
+    async def run():
+        from app.agents.resume_agent import parse_resume
+        from app.schemas.resume_schema import CandidateProfile, Education, Project, WorkExperience
+
+        resume_text = """
+姓名: 王小明
+邮箱: 2297734484@qq.com
+电话: +86 153 9764 7192
+技能: Python, RAG, LangGraph, FastAPI
+项目: HireFlowAgents AI 招聘系统
+"""
+
+        with patch("app.agents.resume_agent.call_llm_structured") as mock:
+            mock.return_value = CandidateProfile(
+                candidate_id="C001",
+                name="\\你\\\\ud83c\\udd70",
+                email="\\n2297734484@qq.com\\r\\n",
+                phone="+86 153-9764-7192",
+                education=[
+                    Education(
+                        degree="\\ud83d\\\\uddfa",
+                        school="彩\\\\uft4\\uC2 \\E7%A6\\\\x81",
+                        major="秋-\\\"AI\\",
+                    )
+                ],
+                skills=[
+                    "\\秋-\\\"AI\\싰 产品与应用:\\RAG \\C5D4 \\叨싰",
+                    "Python",
+                    "LangGraph",
+                ],
+                projects=[
+                    Project(
+                        name="HireFlowAgents：AI\\\\xC9C4贚 \\얳",
+                        description="设计并开发面向招聘场景的 AI 系统。",
+                        technologies=["Docker", "\\秋-后端与接口"],
+                    )
+                ],
+                work_experience=[
+                    WorkExperience(
+                        company="\\中얳 CA",
+                        title="\\ud83d\\",
+                        description=["参与用户管理系统开发和测试。"],
+                    )
+                ],
+                certifications=[],
+                strengths=["\\슱取 \\xC5C4 AI 产品与应用方面的实践经验"],
+                risks=["经验较少"],
+                missing_info=[],
+                estimated_years_of_experience=None,
+            )
+
+            result = await parse_resume(resume_text, "C001")
+
+        assert result["candidate_id"] == "C001"
+        assert result["name"] == "王小明"
+        assert result["email"] == "2297734484@qq.com"
+        assert result["phone"] == "+86 153 9764 7192"
+        assert "Python" in result["skills"]
+        assert "LangGraph" in result["skills"]
+        assert all("\\x" not in skill and "\\u" not in skill for skill in result["skills"])
+        assert result["education"] == []
+        assert result["work_experience"][0]["description"] == ["参与用户管理系统开发和测试。"]
+    asyncio.run(run())
