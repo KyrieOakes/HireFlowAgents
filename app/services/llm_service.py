@@ -84,8 +84,6 @@ def _fix_unicode_strings(obj: Any) -> Any:
         return {k: _fix_unicode_strings(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_fix_unicode_strings(item) for item in obj]
-    elif hasattr(obj, 'model_dump'):  # Pydantic 对象
-        return _fix_unicode_strings(obj.model_dump())
     return obj
 
 
@@ -149,9 +147,7 @@ def call_llm_structured(
         HumanMessage(content=user_message),
     ]
 
-    result = structured_llm.invoke(messages)
-    # 后处理: 修复 LLM 返回的不规范 Unicode 转义
-    return _fix_unicode_strings(result)
+    return structured_llm.invoke(messages)
 
 
 # ================================================================

@@ -97,7 +97,8 @@ async def match_candidate(
     )
 
     # 转为字典，并确保使用传入的 candidate_id
-    result_dict = match_result.model_dump()
+    from app.services.llm_service import _fix_unicode_strings
+    result_dict = _fix_unicode_strings(match_result.model_dump())
     result_dict["candidate_id"] = candidate_profile.get("candidate_id", "unknown")
     return result_dict
 

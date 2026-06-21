@@ -72,7 +72,8 @@ async def analyze_jd(jd_text: str) -> Dict[str, Any]:
     )
 
     # 将 Pydantic 对象转为字典 (方便后续 JSON 序列化和存储)
-    jd_dict = jd_profile.model_dump()
+    from app.services.llm_service import _fix_unicode_strings
+    jd_dict = _fix_unicode_strings(jd_profile.model_dump())
 
     # ================================================================
     # 第2步: 生成评分 Rubric

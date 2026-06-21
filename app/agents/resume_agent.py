@@ -71,8 +71,9 @@ async def parse_resume(
         output_schema=CandidateProfile,
     )
 
-    # 转换为字典并附加 candidate_id
-    profile_dict = candidate_profile.model_dump()
+    # 转换为字典 + 修复 Unicode + 附加 candidate_id
+    from app.services.llm_service import _fix_unicode_strings
+    profile_dict = _fix_unicode_strings(candidate_profile.model_dump())
     profile_dict["candidate_id"] = candidate_id
 
     return profile_dict
