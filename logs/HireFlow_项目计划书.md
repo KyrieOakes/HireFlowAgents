@@ -18,6 +18,20 @@ HireFlow 是一个基于 LangGraph 的多 Agent 招聘筛选系统。
 - Human-in-the-loop 人工审核机制
 - 后端工程化能力
 
+### 当前实现状态（2026-6-21 更新）
+
+项目已经从早期规划稿推进到可演示的完整 MVP：
+
+- 7 个 Agent 已实现：JD、Resume、Match、Ranking、Interview、Evaluation、Email
+- FastAPI 已提供岗位、简历、匹配、面试、评价、邮件、workflow 等核心接口
+- 前端已实现 Dashboard、岗位管理、简历管理、匹配与面试工作台
+- RAG 已接入简历解析和匹配流程：解析后自动索引到 Qdrant，匹配时按候选人检索证据
+- LangGraph HITL 已具备 interrupt/resume 能力，支持人工审核后继续执行
+- Match Agent 已加入粗筛、ThreadPool 并行、prompt 截断和 LLM 失败兜底评分
+- Resume Agent 已加入原文规则解析和乱码/语义错位防线
+- 前端已完成毛玻璃视觉、详情弹层、局部 loading、连续解析等产品化体验优化
+- 测试体系已覆盖 Agent、CRUD、API、端到端冒烟测试，当前 `pytest -q` 为 51 个测试通过
+
 ## 2. 项目名称
 
 HireFlow
@@ -229,8 +243,8 @@ LangGraph 适合本项目，因为它支持：
 
 这一层提供基于 RAG 的证据检索能力。
 
-系统会将简历 chunks 和 JD chunks 存入向量数据库。  
-当 Match Agent 或 Interview Agent 需要证据时，可以从向量数据库中检索相关内容。
+系统会将简历 chunks 存入向量数据库。
+当 Match Agent 需要证据时，可以按 `candidate_id` 从 Qdrant 中检索相关简历片段，用来支撑评分。
 
 主要任务：
 
@@ -241,11 +255,11 @@ LangGraph 适合本项目，因为它支持：
 - 根据 candidate_id 进行过滤
 - 返回带 metadata 的证据
 
-可选向量数据库：
+当前实现：
 
-- Qdrant
-- Chroma
-- FAISS
+- 向量数据库使用 Qdrant
+- 解析简历后自动执行 chunking、embedding、upsert
+- 数据库保存 chunk 与 Qdrant point_id 的映射，保证检索证据可追溯
 
 ### 7.4 多 Agent 工作流层
 
@@ -697,7 +711,7 @@ class HiringState(TypedDict):
     jd_text: str
     jd_profile: Dict[str, Any]
 
-    resume_files: List[str]
+    resume_texts: Dict[str, str]
     candidate_profiles: List[Dict[str, Any]]
 
     resume_chunks: List[Dict[str, Any]]
@@ -755,6 +769,7 @@ class HiringState(TypedDict):
 | company | 公司名称 |
 | jd_text | 原始岗位描述 |
 | jd_profile_json | 结构化 JD 结果 |
+| rubric_json | 评分 Rubric |
 | created_at | 创建时间 |
 
 ### 12.2 candidates 表
@@ -764,6 +779,7 @@ class HiringState(TypedDict):
 | candidate_id | 候选人唯一 ID |
 | name | 候选人姓名 |
 | email | 候选人邮箱 |
+| resume_filename | 简历文件名 |
 | resume_text | 原始简历文本 |
 | profile_json | 结构化候选人画像 |
 | created_at | 创建时间 |
@@ -775,8 +791,9 @@ class HiringState(TypedDict):
 | chunk_id | chunk 唯一 ID |
 | candidate_id | 候选人 ID |
 | text | 简历 chunk 文本 |
-| embedding_id | 向量数据库 ID |
+| qdrant_point_id | Qdrant 向量 ID |
 | page_number | 来源页码 |
+| source | 来源文件 |
 
 ### 12.4 match_results 表
 
@@ -785,10 +802,13 @@ class HiringState(TypedDict):
 | match_id | 匹配结果唯一 ID |
 | job_id | 岗位 ID |
 | candidate_id | 候选人 ID |
-| score | 总分 |
+| total_score | 总分 |
 | dimension_scores_json | 各维度分数 |
 | evidence_json | 评分证据 |
 | risk_json | 风险点 |
+| strengths_json | 优势 |
+| recommendation | 推荐等级 |
+| summary | 匹配总结 |
 | created_at | 创建时间 |
 
 ### 12.5 interview_questions 表
@@ -835,52 +855,57 @@ class HiringState(TypedDict):
 POST /jobs/upload
 POST /jobs/{job_id}/parse
 GET /jobs/{job_id}
+GET /jobs/
+DELETE /jobs/{job_id}
 ```
 
 ### 13.2 Resume APIs
 
 ```text
 POST /resumes/upload
-POST /candidates/{candidate_id}/parse
-GET /candidates/{candidate_id}
+POST /resumes/upload-file
+POST /resumes/{candidate_id}/parse
+GET /resumes/{candidate_id}
+GET /resumes/
+DELETE /resumes/{candidate_id}
 ```
 
 ### 13.3 Matching APIs
 
 ```text
-POST /jobs/{job_id}/match
-GET /jobs/{job_id}/ranking
-GET /jobs/{job_id}/candidates/{candidate_id}/match-result
+POST /jobs/{job_id}/match?limit=N
+GET /jobs/{job_id}/ranking?limit=N
+GET /jobs/{job_id}/candidates/{candidate_id}/detail
 ```
 
 ### 13.4 Interview APIs
 
 ```text
-POST /candidates/{candidate_id}/questions
-POST /candidates/{candidate_id}/evaluate
-GET /candidates/{candidate_id}/evaluation
+POST /jobs/{job_id}/candidates/{candidate_id}/questions
+GET /jobs/{job_id}/candidates/{candidate_id}/questions
+POST /jobs/{job_id}/candidates/{candidate_id}/evaluate
+GET /jobs/{job_id}/candidates/{candidate_id}/evaluation
 ```
 
 ### 13.5 Email APIs
 
 ```text
-POST /candidates/{candidate_id}/email-draft
-GET /candidates/{candidate_id}/email-draft
+POST /jobs/{job_id}/candidates/{candidate_id}/email-draft
+GET /jobs/{job_id}/candidates/{candidate_id}/email-draft
 POST /email-drafts/{email_id}/approve
 ```
 
-### 13.6 Evaluation APIs
+### 13.6 Workflow APIs
 
 ```text
-GET /evaluation/report
-GET /evaluation/parsing
-GET /evaluation/ranking
-GET /evaluation/workflow
+POST /workflow/run
+POST /workflow/{workflow_id}/resume
+GET /workflow/{workflow_id}/state
 ```
 
 ## 14. 前端页面设计
 
-前端不需要一开始做得特别复杂，但需要清晰展示完整流程。
+前端用于项目演示和面试展示，当前采用 Next.js + Tailwind CSS，整体风格偏 HR/ATS 工作台。
 
 ### 14.1 Dashboard 页面
 
@@ -892,54 +917,60 @@ GET /evaluation/workflow
 - shortlist 候选人数量
 - 工作流运行状态
 
-### 14.2 岗位详情页
+### 14.2 岗位管理页
 
 展示内容：
 
+- JD 上传与解析
+- 岗位列表
 - 原始 JD
 - 必备技能
 - 加分技能
 - 岗位职责
 - 评分 Rubric
+- 详情弹层
 
-### 14.3 候选人排名页
+### 14.3 简历管理页
 
 展示内容：
 
+- 粘贴简历文本
+- PDF/DOCX/TXT/MD 文件上传
+- 候选人列表
+- 单候选人解析状态
+- 结构化候选人画像
+- 原始简历文本
+- 详情弹层
+
+### 14.4 匹配与面试页
+
+展示内容：
+
+- 选择岗位
+- 选择 Top N 匹配人数
 - 候选人列表
 - 总分
 - 各维度分数
 - 推荐等级
 - 优势
 - 风险点
-
-### 14.4 候选人详情页
-
-展示内容：
-
-- 候选人画像
 - 简历证据
 - 匹配解释
-- 风险分析
-- 推荐结果
-
-### 14.5 面试页面
-
-展示内容：
-
-- 生成的面试问题
-- 每个问题的提问目的
-- 面试记录输入框
-- 面试评价结果
-
-### 14.6 邮件草稿页面
-
-展示内容：
-
+- 面试问题生成
+- 面试反馈输入
+- 结构化评价结果
 - 邮件类型
-- 邮件标题
-- 邮件正文
-- 人工审核按钮
+- 邮件草稿生成与审批
+
+### 14.5 产品化交互优化
+
+当前前端已加入以下体验优化：
+
+- 毛玻璃面板和统一卡片样式
+- 页面进入和按钮 hover 动效
+- 详情弹层高层级显示，避免被顶部导航遮挡
+- 弹层自身滚动，长内容详情可完整查看
+- 简历解析使用单卡片 loading，连续解析多个候选人时页面不白屏
 
 ## 15. 评估框架
 
@@ -1140,7 +1171,7 @@ Average cost per candidate: 0.03 USD
 
 ## 17. 开发路线图
 
-## Phase 1：MVP 工作流
+## Phase 1：MVP 工作流（已完成）
 
 目标：
 
@@ -1155,13 +1186,13 @@ Average cost per candidate: 0.03 USD
 - 匹配候选人
 - 生成排序结果
 
-交付物：
+已交付：
 
-- 基础 CLI 或 API demo
+- CLI + API demo
 - 一个 JD 对应五份简历
 - 候选人 ranking 输出
 
-## Phase 2：结构化输出与数据存储
+## Phase 2：结构化输出与数据存储（已完成）
 
 目标：
 
@@ -1170,19 +1201,19 @@ Average cost per candidate: 0.03 USD
 任务：
 
 - 添加 Pydantic schemas
-- 添加 SQLite 或 PostgreSQL
+- 添加 PostgreSQL
 - 存储 candidate profiles
 - 存储 JD profiles
 - 存储 match results
 - 添加错误处理
 
-交付物：
+已交付：
 
 - 稳定的后端数据 pipeline
 - 结构化 JSON 输出
 - 可持久化的结果存储
 
-## Phase 3：RAG 证据检索
+## Phase 3：RAG 证据检索（已完成）
 
 目标：
 
@@ -1192,16 +1223,17 @@ Average cost per candidate: 0.03 USD
 
 - 对简历进行 chunking
 - 生成 embeddings
-- 将 vectors 存入 Qdrant 或 Chroma
+- 将 vectors 存入 Qdrant
 - 根据 candidate_id 检索 evidence
 - 将 evidence 附加到 match results 中
 
-交付物：
+已交付：
 
 - 基于证据的候选人匹配结果
-- 每个分数都带有来源证据
+- 简历解析后自动索引到 Qdrant
+- 匹配前按候选人检索 RAG evidence
 
-## Phase 4：LangGraph 多 Agent 工作流
+## Phase 4：LangGraph 多 Agent 工作流（已完成核心能力）
 
 目标：
 
@@ -1220,14 +1252,15 @@ Average cost per candidate: 0.03 USD
 - 添加 conditional routing
 - 添加 human review nodes
 
-交付物：
+已交付：
 
 - LangGraph 工作流
 - Shared state
 - Conditional edges
-- Multi-agent execution trace
+- Human Review interrupt/resume
+- Workflow API
 
-## Phase 5：评估框架
+## Phase 5：评估框架（已完成基础版）
 
 目标：
 
@@ -1243,14 +1276,15 @@ Average cost per candidate: 0.03 USD
 - 添加 workflow reliability 评估
 - 生成 evaluation report
 
-交付物：
+已交付：
 
 - Evaluation scripts
 - Evaluation metrics
 - JSON report
-- 展示用图表
+- Notebook 评估入口
+- 51 个自动化测试覆盖 Agent、CRUD、API、端到端冒烟流程
 
-## Phase 6：前端与 Demo
+## Phase 6：前端与 Demo（已完成 MVP）
 
 目标：
 
@@ -1265,25 +1299,48 @@ Average cost per candidate: 0.03 USD
 - 构建面试问题页
 - 构建邮件草稿页
 
-交付物：
+已交付：
 
 - End-to-end demo
 - GitHub README
-- Demo screenshots
-- 可以写进简历的完整项目
+- Next.js 前端工作台
+- 岗位、简历、匹配与面试核心页面
+- 可以写进简历并在面试中讲清楚的完整项目
+
+## Phase 7：产品化稳定性（进行中）
+
+目标：
+
+提升真实使用时的稳定性、性能和可解释性。
+
+已完成:
+
+- Resume Agent 乱码清洗和语义错位修复
+- Match Agent prompt 截断和输出限制
+- LLM 精排失败时规则兜底评分
+- 匹配结果按 `job_id + candidate_id` 更新，避免重复 Case
+- 前端详情弹层、局部 loading、连续解析优化
+
+后续:
+
+- 前端错误提示细化，区分后端未启动、接口 500、LLM 截断等场景
+- 匹配结果展示“兜底评分”标记，提醒 HR 人工复核
+- 增加更多中文简历格式样例测试
 
 ## 18. 项目文件结构
 
 ```text
-hireflow/
+HireFlowAgents/
 ├── app/
-│   ├── main.py
+│   ├── main.py                  # FastAPI 入口
+│   ├── cli.py                   # CLI Demo
 │   ├── api/
 │   │   ├── jobs.py
 │   │   ├── resumes.py
 │   │   ├── matching.py
 │   │   ├── interview.py
-│   │   └── evaluation.py
+│   │   ├── evaluation.py
+│   │   └── workflow.py
 │   ├── agents/
 │   │   ├── jd_agent.py
 │   │   ├── resume_agent.py
@@ -1300,10 +1357,13 @@ hireflow/
 │   │   ├── jd_schema.py
 │   │   ├── resume_schema.py
 │   │   ├── match_schema.py
+│   │   ├── interview_schema.py
 │   │   └── evaluation_schema.py
 │   ├── services/
 │   │   ├── document_loader.py
 │   │   ├── embedding_service.py
+│   │   ├── rag_service.py
+│   │   ├── pre_screening.py
 │   │   ├── vector_store.py
 │   │   └── llm_service.py
 │   ├── database/
@@ -1311,27 +1371,21 @@ hireflow/
 │   │   ├── session.py
 │   │   └── crud.py
 │   └── utils/
-│       ├── logger.py
 │       └── config.py
 ├── evaluation/
-│   ├── datasets/
-│   ├── run_parsing_eval.py
-│   ├── run_ranking_eval.py
-│   ├── run_rag_eval.py
-│   └── reports/
+│   └── run_eval.py
 ├── frontend/
 │   ├── pages/
 │   ├── components/
-│   └── services/
+│   ├── services/
+│   └── types/
 ├── data/
-│   ├── jobs/
-│   ├── resumes/
-│   └── synthetic/
-├── tests/
+├── logs/
+├── tests/                      # 51 tests
+├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
-├── README.md
-└── PROJECT_PLAN.md
+└── README.md
 ```
 
 ## 19. 项目技术亮点
@@ -1352,6 +1406,11 @@ hireflow/
 12. 向量数据库集成
 13. 前端 Dashboard
 14. Docker 部署
+15. LLM 本地/云端双模式
+16. ThreadPool 并行精排与关键词粗筛
+17. Resume Agent 原文规则解析与乱码防线
+18. Match Agent 输出截断兜底与重复结果去重
+19. 51 个自动化测试覆盖核心链路
 
 ## 20. 简历 Bullet Points
 
@@ -1383,6 +1442,8 @@ hireflow/
 
 第五，我设计了评估框架，分别评估 parsing quality、ranking quality、RAG evidence quality 和 workflow stability。
 
+第六，我在真实联调中补了稳定性防线：Resume Agent 不完全依赖 LLM，而是结合原文规则解析；Match Agent 会控制 prompt/token 成本，并在 LLM 精排失败时给出规则兜底评分。
+
 ## 22. 风险与限制
 
 本项目存在以下风险和限制：
@@ -1394,6 +1455,8 @@ hireflow/
 5. 评估需要人工标注数据
 6. 邮件生成必须经过人工审核
 7. 系统不能自动做最终招聘决定
+8. 本地模型能力和上下文长度有限，需要控制 prompt 和输出长度
+9. 复杂中文简历格式仍需要继续补充规则样例
 
 ## 23. 后续改进方向
 
@@ -1409,10 +1472,12 @@ hireflow/
 8. 支持多语言简历
 9. 使用 Docker 和云服务进行部署
 10. 增加用户登录和权限管理
+11. 增加匹配结果缓存，避免同一岗位重复匹配重复调用 LLM
+12. 在前端标记“LLM 兜底评分”，方便 HR 人工复核
 
 ## 24. 最终项目范围
 
-第一版完整项目建议重点完成：
+当前第一版完整项目已经完成：
 
 - JD 解析
 - 简历解析
@@ -1420,9 +1485,14 @@ hireflow/
 - 候选人排序
 - RAG 证据检索
 - LangGraph 工作流
-- 评估报告
+- Human-in-the-loop interrupt/resume
+- 面试问题生成
+- 面试评价
+- 邮件草稿生成与人工审批
+- Next.js 前端工作台
+- 评估脚本和 51 个自动化测试
 
-面试题生成、面试评价和邮件草稿可以在核心筛选流程稳定后继续添加。
+后续重点不再是补齐流程，而是继续提高稳定性、评估质量和真实产品体验。
 
 ## 25. 项目总结
 
@@ -1430,13 +1500,15 @@ HireFlow 是一个比较适合校招简历的项目，因为它结合了 LLM 应
 
 这个项目最重要的价值是：它不是一个简单的 AI demo，而是一个基于 workflow 的系统，能够模拟真实业务流程。
 
-最强的三个卖点是：
+最强的五个卖点是：
 
 1. 基于 LangGraph 的多 Agent 工作流
 2. 基于 RAG 证据的候选人排序
-3. 完整的评估框架
+3. 面试问题、评价、邮件草稿的完整后续流程
+4. 面向真实联调问题的稳定性防线
+5. 完整的评估和测试体系
 
-如果这三部分实现得比较扎实，这个项目就可以作为一个比较有竞争力的校招简历项目。
+现在这个项目已经可以作为一个比较完整的校招简历项目进行展示，后续主要围绕更真实的数据集、更细的评估指标和更好的前端体验继续增强。
 
 ---
 
