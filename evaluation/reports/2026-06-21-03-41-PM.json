@@ -1,0 +1,56 @@
+{
+  "timestamp": "2026-06-21T15:42:08.564069+10:00",
+  "pipeline": {
+    "steps": [
+      {
+        "step": "JD 解析",
+        "time": 6.82
+      },
+      {
+        "step": "简历解析",
+        "time": 11.59
+      },
+      {
+        "step": "匹配评分",
+        "time": 17.6
+      },
+      {
+        "step": "排序",
+        "time": 2.13
+      }
+    ],
+    "total_time": 38.13
+  },
+  "ranking": [
+    "E001",
+    "E002",
+    "E003"
+  ],
+  "scores": [
+    {
+      "id": "E001",
+      "score": -2.0,
+      "rec": "Not Recommended"
+    },
+    {
+      "id": "E002",
+      "score": -5.0,
+      "rec": "Not Recommended"
+    },
+    {
+      "id": "E003",
+      "score": -10.0,
+      "rec": "Not Recommended"
+    }
+  ],
+  "metrics": {
+    "precision_at_1": 1.0,
+    "precision_at_2": 1.0,
+    "precision_at_3": 1.0,
+    "ndcg_at_3": 0.965,
+    "score_max": -2.0,
+    "score_min": -10.0,
+    "score_mean": -5.7,
+    "score_range": 8.0
+  }
+}
