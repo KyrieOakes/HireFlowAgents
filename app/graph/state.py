@@ -31,9 +31,10 @@ class HiringState(TypedDict):
     jd_profile: Dict[str, Any]
 
     # ---- 简历相关 ----
-    # resume_files: 上传的简历文件路径列表
-    resume_files: List[str]
-    # candidate_profiles: Resume Agent 解析后的候选人信息列表，每个元素是一个候选人的结构化 JSON
+    # resume_texts: 上传的简历文本列表, 每个元素包含 candidate_id, text, filename
+    # 格式: [{"candidate_id": "xxx", "text": "简历全文...", "filename": "xxx.pdf"}, ...]
+    resume_texts: List[Dict[str, str]]
+    # candidate_profiles: Resume Agent 解析后的候选人信息列表
     candidate_profiles: List[Dict[str, Any]]
 
     # ---- RAG 检索相关 ----

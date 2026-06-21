@@ -4,6 +4,12 @@ app/graph/workflow.py
 LangGraph 工作流定义 (PostgresSaver 持久化)。
 
 使用 StateGraph 将多个 Agent 节点连接成完整的招聘流程。
+
+架构说明 (当前阶段):
+  - FastAPI 路由直接调用 agent/service (性能优先, 跳过 LangGraph 开销)
+  - workflow 是规划的正式入口, 提供 Human-in-the-loop + 断点恢复能力
+  - 后续 Phase 会将主流程迁移到 workflow, 当前保留作为架构骨架
+
 PostgresSaver 是 LangGraph 官方推荐的生产级 Checkpointer:
 - 工作流状态持久化到 PostgreSQL
 - 支持 Human-in-the-loop 中断恢复
