@@ -13,7 +13,9 @@ HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → 粗筛 → LL
 - Human-in-the-loop 审核 (interrupt/resume)
 - LLM 本地/云端双模式 (一键切换)
 - PDF/DOCX 文件上传 + 自动解析 + 自动命名
-- 44 个测试 (0 failures)
+- 前端产品化体验: 毛玻璃工作台、详情弹层、局部 loading、连续解析
+- LLM 稳定性兜底: 简历语义错位修复、匹配输出截断兜底评分
+- 49 个测试 (0 failures)
 - Next.js 前端 (HR/ATS 工作台风格)
 
 ## 快速开始
@@ -67,7 +69,7 @@ python run_eval.py                          # 自动化脚本
 ### 7. 测试
 
 ```bash
-pytest tests/                               # 44 tests
+pytest tests/                               # 49 tests
 pytest tests/ -v                            # 详细
 ```
 
@@ -134,7 +136,7 @@ pytest tests/ -v                            # 详细
 | 数据库 | PostgreSQL 16 |
 | 向量库 | Qdrant |
 | 前端 | Next.js 14 + TypeScript + Tailwind CSS |
-| 测试 | pytest (44 tests), SQLite 内存库, FastAPI TestClient |
+| 测试 | pytest (49 tests), SQLite 内存库, FastAPI TestClient |
 | 配置 | Pydantic Settings + .env |
 | 部署 | Docker Compose |
 
@@ -145,7 +147,7 @@ HireFlowAgents/
 ├── app/
 │   ├── main.py              # FastAPI 入口
 │   ├── cli.py               # CLI Demo
-│   ├── api/                  # 5 个路由 (jobs/resumes/matching/interview/evaluation/workflow)
+│   ├── api/                  # 6 个路由 (jobs/resumes/matching/interview/evaluation/workflow)
 │   ├── agents/               # 7 个 Agent
 │   ├── graph/                # LangGraph (state/nodes/workflow + HITL)
 │   ├── schemas/              # Pydantic 模型
@@ -154,7 +156,7 @@ HireFlowAgents/
 │   └── utils/                # config + logger
 ├── frontend/                 # Next.js (4 页面)
 ├── evaluation/               # Notebook + 评估脚本 + reports
-├── tests/                    # 44 tests (Agent/CRUD/API/E2E)
+├── tests/                    # 49 tests (Agent/CRUD/API/E2E)
 ├── data/                     # 测试数据
 ├── logs/                     # 项目文档 + 开发日志
 ├── Dockerfile
@@ -169,6 +171,13 @@ HireFlowAgents/
 - 邮件 `status="draft"`，审核只改状态，不发送
 - 不编造时间/地点/薪资/录用承诺
 - API Key 从 `.env` 读取，不硬编码
+
+## 稳定性设计
+
+- Resume Agent: 姓名、邮箱、电话、教育、项目、技能优先从原文规则解析，LLM 输出作为补充，避免章节标题或乱码进入画像。
+- Match Agent: prompt 自动截断，输出强制简洁；单个候选人 LLM 精排失败时返回规则兜底评分，不让 Top N 匹配整体失败。
+- 前端交互: 简历解析使用单卡片 loading + 后台同步，连续解析多个候选人时页面不会白屏。
+- 详情弹层: 岗位、简历、匹配详情统一高层级弹窗和遮罩滚动，避免被导航遮挡。
 
 ## 常用命令
 
