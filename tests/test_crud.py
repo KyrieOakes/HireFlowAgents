@@ -122,6 +122,54 @@ def test_save_match_result(db: Session):
     assert len(results) == 1
 
 
+def test_save_match_result_updates_existing_pair(db: Session):
+    """同一岗位和候选人重复匹配时，更新旧评分，不新增重复记录。"""
+    job = crud.create_job(db, "JD")
+    c = crud.create_candidate(db, "简历")
+
+    first = crud.save_match_result(
+        db, job.job_id, c.candidate_id, 70.0,
+        {"technical_skills": 20}, [], ["风险A"], ["优势A"], "Medium Match", "第一次评分",
+    )
+    second = crud.save_match_result(
+        db, job.job_id, c.candidate_id, 88.0,
+        {"technical_skills": 28}, [], ["风险B"], ["优势B"], "Strong Match", "第二次评分",
+    )
+
+    results = crud.get_match_results_by_job(db, job.job_id)
+    assert len(results) == 1
+    assert results[0].match_id == first.match_id == second.match_id
+    assert results[0].total_score == 88.0
+    assert results[0].summary == "第二次评分"
+
+
+def test_get_match_results_by_job_deduplicates_legacy_rows(db: Session):
+    """读取历史匹配结果时，同一候选人只返回最新一条，避免页面出现重复 Case。"""
+    from app.database import models
+
+    job = crud.create_job(db, "JD")
+    c = crud.create_candidate(db, "简历")
+    old_match = models.MatchResult(
+        job_id=job.job_id,
+        candidate_id=c.candidate_id,
+        total_score=60.0,
+        summary="旧评分",
+    )
+    new_match = models.MatchResult(
+        job_id=job.job_id,
+        candidate_id=c.candidate_id,
+        total_score=90.0,
+        summary="新评分",
+    )
+    db.add(old_match)
+    db.add(new_match)
+    db.commit()
+
+    results = crud.get_match_results_by_job(db, job.job_id)
+    assert len(results) == 1
+    assert results[0].summary == "新评分"
+
+
 # ---- 邮件草稿 CRUD ----
 
 def test_email_draft_flow(db: Session):

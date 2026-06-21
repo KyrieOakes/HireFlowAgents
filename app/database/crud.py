@@ -262,19 +262,37 @@ def save_match_result(
         recommendation: 推荐等级
         summary: 匹配总结
     返回:
-        MatchResult: 创建的匹配结果
+        MatchResult: 创建或更新后的匹配结果
     """
-    match = models.MatchResult(
-        job_id=job_id,
-        candidate_id=candidate_id,
-        total_score=total_score,
-        dimension_scores_json=dimension_scores,
-        evidence_json=evidence,
-        risk_json=risks,
-        strengths_json=strengths,
-        recommendation=recommendation,
-        summary=summary,
+    # 同一个岗位 + 同一个候选人只应该保留一条当前评分。
+    # 用户反复点击“开始匹配”时，更新旧记录而不是新增重复记录。
+    existing_results = (
+        db.query(models.MatchResult)
+        .filter(
+            models.MatchResult.job_id == job_id,
+            models.MatchResult.candidate_id == candidate_id,
+        )
+        .order_by(models.MatchResult.created_at.desc())
+        .all()
     )
+    match = existing_results[0] if existing_results else None
+
+    if match is None:
+        match = models.MatchResult(job_id=job_id, candidate_id=candidate_id)
+        db.add(match)
+
+    match.total_score = total_score
+    match.dimension_scores_json = dimension_scores
+    match.evidence_json = evidence
+    match.risk_json = risks
+    match.strengths_json = strengths
+    match.recommendation = recommendation
+    match.summary = summary
+
+    # 清理历史重复记录，修复之前多次匹配留下的旧数据。
+    for duplicate in existing_results[1:]:
+        db.delete(duplicate)
+
     db.add(match)
     db.commit()
     db.refresh(match)
@@ -293,11 +311,22 @@ def get_match_results_by_job(
     返回:
         List[MatchResult]: 按分数从高到低的匹配结果
     """
-    return (
+    results = (
         db.query(models.MatchResult)
         .filter(models.MatchResult.job_id == job_id)
-        .order_by(models.MatchResult.total_score.desc())
+        .order_by(models.MatchResult.created_at.desc())
         .all()
+    )
+    # 历史版本可能已经留下同一 candidate 的多条记录。
+    # 这里先按创建时间取最新，再按分数排序给前端排名。
+    latest_by_candidate = {}
+    for result in results:
+        if result.candidate_id not in latest_by_candidate:
+            latest_by_candidate[result.candidate_id] = result
+    return sorted(
+        latest_by_candidate.values(),
+        key=lambda result: result.total_score or 0,
+        reverse=True,
     )
 
 
@@ -311,6 +340,7 @@ def get_match_result(
             models.MatchResult.job_id == job_id,
             models.MatchResult.candidate_id == candidate_id,
         )
+        .order_by(models.MatchResult.created_at.desc())
         .first()
     )
 
