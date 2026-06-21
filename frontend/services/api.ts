@@ -11,6 +11,9 @@ import type {
   MatchResult,
   RankingResult,
   MatchDetail,
+  InterviewQuestion,
+  InterviewEvaluation,
+  EmailDraft,
 } from "@/types";
 
 // --- 配置 ---
@@ -115,8 +118,9 @@ export async function getCandidate(candidateId: string): Promise<Candidate> {
 /** 执行匹配 + 排序 (limit=0 表示全部) */
 export async function runMatching(jobId: string, limit: number = 0): Promise<{
   job_id: string;
-  total_candidates_in_db: number;
-  candidates_matched: number;
+  total_in_db: number;
+  prescreened: number;
+  llm_scored: number;
   limit: number | null;
   ranking: any;
   match_results: MatchResult[];
@@ -134,6 +138,79 @@ export async function getRanking(jobId: string, limit: number = 0): Promise<Rank
 /** 获取单个候选人详细评分 */
 export async function getMatchDetail(jobId: string, candidateId: string): Promise<MatchDetail> {
   return request(`/jobs/${jobId}/candidates/${candidateId}/detail`);
+}
+
+// ================================================================
+// 面试 / 评价 / 邮件 API
+// ================================================================
+
+/** 生成候选人的面试问题 */
+export async function generateInterviewQuestions(
+  jobId: string,
+  candidateId: string,
+): Promise<{ job_id: string; candidate_id: string; questions: InterviewQuestion[] }> {
+  return request(`/jobs/${jobId}/candidates/${candidateId}/questions`, {
+    method: "POST",
+  });
+}
+
+/** 获取候选人的面试问题 */
+export async function getInterviewQuestions(
+  jobId: string,
+  candidateId: string,
+): Promise<{ job_id: string; candidate_id: string; questions: InterviewQuestion[] }> {
+  return request(`/jobs/${jobId}/candidates/${candidateId}/questions`);
+}
+
+/** 提交面试反馈并生成结构化评价 */
+export async function submitInterviewEvaluation(
+  jobId: string,
+  candidateId: string,
+  interviewFeedback: string,
+): Promise<{ job_id: string; candidate_id: string; evaluation: InterviewEvaluation }> {
+  return request(`/jobs/${jobId}/candidates/${candidateId}/evaluate`, {
+    method: "POST",
+    body: JSON.stringify({ interview_feedback: interviewFeedback }),
+  });
+}
+
+/** 获取候选人的结构化面试评价 */
+export async function getInterviewEvaluation(
+  jobId: string,
+  candidateId: string,
+): Promise<{
+  job_id: string;
+  candidate_id: string;
+  feedback_text: string;
+  evaluation: InterviewEvaluation;
+  final_recommendation: string;
+}> {
+  return request(`/jobs/${jobId}/candidates/${candidateId}/evaluation`);
+}
+
+/** 生成 HR 邮件草稿 */
+export async function createEmailDraft(
+  jobId: string,
+  candidateId: string,
+  emailType: "interview_invite" | "rejection" | "follow_up" | "next_round",
+): Promise<EmailDraft & { job_id: string; candidate_id: string; message?: string }> {
+  return request(`/jobs/${jobId}/candidates/${candidateId}/email-draft`, {
+    method: "POST",
+    body: JSON.stringify({ email_type: emailType }),
+  });
+}
+
+/** 获取候选人的邮件草稿列表 */
+export async function getEmailDrafts(
+  jobId: string,
+  candidateId: string,
+): Promise<{ job_id: string; candidate_id: string; drafts: EmailDraft[] }> {
+  return request(`/jobs/${jobId}/candidates/${candidateId}/email-draft`);
+}
+
+/** 批准邮件草稿；系统只改状态，不发送邮件 */
+export async function approveEmailDraft(emailId: string): Promise<{ email_id: string; status: string; message: string }> {
+  return request(`/email-drafts/${emailId}/approve`, { method: "POST" });
 }
 
 // ================================================================

@@ -114,9 +114,11 @@ export interface MatchResult {
 }
 
 export interface Evidence {
-  claim: string;
-  source: string;
+  claim?: string;
+  source?: string;
   text: string;
+  score?: number;
+  metadata?: Record<string, any>;
 }
 
 /** 排序结果 */
@@ -145,6 +147,41 @@ export interface MatchDetail {
   risks: string[];
   recommendation: string;
   summary?: string;
+}
+
+/** 面试问题 */
+export interface InterviewQuestion {
+  question_id: string;
+  question_type: "technical" | "project_deep_dive" | "behavioral" | "risk_verification" | string;
+  question: string;
+  purpose: string;
+}
+
+/** 面试评价 */
+export interface InterviewEvaluation {
+  technical_depth_score?: number;
+  communication_score?: number;
+  problem_solving_score?: number;
+  risk_resolution?: Array<{
+    risk: string;
+    status: "resolved" | "partially_resolved" | "unresolved" | string;
+    reason: string;
+  }>;
+  strengths: string[];
+  concerns: string[];
+  summary: string;
+  recommendation: "Strongly Recommend" | "Recommend" | "Hold" | "Not Recommend" | string;
+  requires_human_review: boolean;
+}
+
+/** 邮件草稿 */
+export interface EmailDraft {
+  email_id: string;
+  email_type: "interview_invite" | "rejection" | "follow_up" | "next_round" | string;
+  subject: string;
+  body: string;
+  status: "draft" | "approved" | string;
+  requires_human_approval?: boolean;
 }
 
 /** API 统一响应包装 */

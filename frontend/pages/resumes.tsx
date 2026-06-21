@@ -156,18 +156,25 @@ export default function ResumesPage() {
   }
 
   return (
-    <div>
-      <h1 className="text-xl font-bold text-gray-800 mb-6">简历管理</h1>
+    <div className="space-y-6 soft-enter">
+      <div className="glass-pad">
+        <p className="section-label">Candidate Intake</p>
+        <h1 className="page-title mt-2">简历管理</h1>
+        <p className="page-subtitle">上传简历文件或粘贴文本，解析候选人画像并为 RAG 证据检索建立索引。</p>
+      </div>
 
       {error && <div className="mb-4"><ErrorMessage message={error} /></div>}
 
       {/* ---- 录入表单 ---- */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6">
-        <h2 className="text-sm font-medium text-gray-700 mb-3">录入简历</h2>
+      <div className="glass-pad">
+        <div className="mb-4">
+          <h2 className="text-base font-semibold text-slate-900">录入简历</h2>
+          <p className="mt-1 text-sm text-slate-500">支持 PDF、DOCX、TXT、MD，文件上传后可自动触发解析。</p>
+        </div>
 
         {/* ---- PDF/DOCX 文件上传区 ---- */}
         <div
-          className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center mb-4 hover:border-blue-400 transition-colors cursor-pointer"
+          className="mb-4 cursor-pointer rounded-lg border-2 border-dashed border-slate-300 bg-white/55 p-6 text-center backdrop-blur transition duration-200 hover:-translate-y-0.5 hover:border-sky-400 hover:bg-sky-50/60"
           onClick={() => fileRef.current?.click()}
           onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-blue-500","bg-blue-50"); }}
           onDragLeave={(e) => { e.currentTarget.classList.remove("border-blue-500","bg-blue-50"); }}
@@ -182,11 +189,11 @@ export default function ResumesPage() {
             }
           }}
         >
-          <div className="text-3xl mb-2 text-gray-300">📄</div>
-          <p className="text-sm text-gray-500">
-            <span className="text-blue-600 font-medium">点击选择</span> 或拖拽 PDF / DOCX / TXT 文件到此处
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200 bg-white/80 text-sm font-semibold text-slate-500 shadow-sm">CV</div>
+          <p className="text-sm text-slate-600">
+            <span className="font-medium text-sky-700">点击选择</span> 或拖拽 PDF / DOCX / TXT 文件到此处
           </p>
-          <p className="text-xs text-gray-400 mt-1">支持 PDF, DOCX, TXT, MD 格式</p>
+          <p className="mt-1 text-xs text-slate-400">支持 PDF, DOCX, TXT, MD 格式</p>
           <input
             ref={fileRef}
             type="file"
@@ -198,19 +205,17 @@ export default function ResumesPage() {
 
         {/* 已选文件提示 */}
         {uploadFile && (
-          <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded p-3 mb-4">
+          <div className="mb-4 flex items-center justify-between rounded-lg border border-sky-200 bg-sky-50/80 p-3">
             <div className="flex items-center gap-2">
-              <span className="text-blue-600 font-medium text-sm">
-                {uploadFile.name.endsWith(".pdf") ? "📕" : uploadFile.name.endsWith(".docx") ? "📘" : "📄"}
-              </span>
-              <span className="text-sm text-gray-700">{uploadFile.name}</span>
-              <span className="text-xs text-gray-400">({(uploadFile.size / 1024).toFixed(0)} KB)</span>
+              <span className="chip-blue">文件</span>
+              <span className="text-sm text-slate-700">{uploadFile.name}</span>
+              <span className="text-xs text-slate-400">({(uploadFile.size / 1024).toFixed(0)} KB)</span>
             </div>
             <div className="flex gap-2">
               <LoadingButton onClick={handleFileUpload} loading={uploading} disabled={!uploadFile}>
                 上传并解析
               </LoadingButton>
-              <button onClick={() => { setUploadFile(null); setFilename(""); }} className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700">
+              <button onClick={() => { setUploadFile(null); setFilename(""); }} className="px-3 py-2 text-sm text-slate-500 hover:text-slate-700">
                 取消
               </button>
             </div>
@@ -219,25 +224,25 @@ export default function ResumesPage() {
 
         {/* 上传后文本预览 */}
         {uploadPreview && (
-          <div className="bg-green-50 border border-green-200 rounded p-3 mb-4">
-            <p className="text-xs text-green-700 mb-1">✅ 文件上传成功，已自动提取文本:</p>
-            <pre className="text-xs text-green-800 whitespace-pre-wrap max-h-24 overflow-auto">{uploadPreview}</pre>
+          <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50/80 p-3">
+            <p className="mb-1 text-xs font-medium text-emerald-700">文件上传成功，已自动提取文本:</p>
+            <pre className="max-h-24 overflow-auto whitespace-pre-wrap text-xs text-emerald-800">{uploadPreview}</pre>
           </div>
         )}
 
         {/* ---- 文本粘贴区 ---- */}
-        <div className="border-t border-gray-200 pt-4 mt-2">
-          <p className="text-xs text-gray-400 mb-2">或手动粘贴简历文本:</p>
+        <div className="mt-2 border-t border-slate-200 pt-4">
+          <p className="mb-2 text-xs text-slate-400">或手动粘贴简历文本:</p>
           <div className="mb-3 grid grid-cols-1 md:grid-cols-2 gap-2">
             <input
               type="text" placeholder="候选人姓名 (可选, 匿名简历自动命名)" value={name}
               onChange={(e) => setName(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded text-sm"
+              className="field"
             />
             <input
               type="text" placeholder="文件名 (可选)" value={filename}
               onChange={(e) => setFilename(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded text-sm"
+              className="field"
             />
           </div>
           <textarea
@@ -245,7 +250,7 @@ export default function ResumesPage() {
             value={resumeText}
             onChange={(e) => setResumeText(e.target.value)}
             rows={8}
-            className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono resize-y"
+            className="field-mono resize-y"
           />
           <div className="mt-3">
             <LoadingButton onClick={handleCreate} loading={creating} disabled={!resumeText.trim()}>
@@ -259,22 +264,22 @@ export default function ResumesPage() {
       {candidates.length === 0 ? (
         <EmptyState title="还没有候选人" description="在上方粘贴简历文本来录入第一个候选人" />
       ) : (
-        <div ref={listRef} className="space-y-3">
+        <div ref={listRef} className="grid gap-3">
           {candidates.map((c) => (
-            <div key={c.candidate_id} className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between">
+            <div key={c.candidate_id} className="focus-card flex items-center justify-between p-4">
               <div>
-                <span className="font-medium text-gray-800">
+                <span className="font-semibold text-slate-900">
                   {c.name || c.candidate_id || "未命名"}
                 </span>
-                <span className="text-xs text-gray-400 ml-2">{c.candidate_id}</span>
-                {c.resume_filename && <span className="text-xs text-gray-400 ml-2">📄 {c.resume_filename}</span>}
+                <span className="ml-2 text-xs text-slate-400">{c.candidate_id}</span>
+                {c.resume_filename && <span className="ml-2 text-xs text-slate-400">{c.resume_filename}</span>}
                 {(c.has_profile || c.profile) && (
-                  <span className="ml-2 inline-block px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">已解析</span>
+                  <span className="chip-green ml-2">已解析</span>
                 )}
                 {c.profile && (
                   <div className="flex flex-wrap gap-1 mt-1">
                     {c.profile.skills?.slice(0, 5).map((s) => (
-                      <span key={s} className="px-1.5 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">{s}</span>
+                      <span key={s} className="chip">{s}</span>
                     ))}
                   </div>
                 )}
@@ -299,11 +304,11 @@ export default function ResumesPage() {
 
       {/* ---- 候选人详情弹层 ---- */}
       {selected && (
-        <div className="fixed inset-0 bg-black/30 z-20 flex items-start justify-center pt-20" onClick={() => setSelected(null)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white">
-              <h3 className="font-medium">{selected.name || "候选人详情"}</h3>
-              <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        <div className="fixed inset-0 z-20 flex items-start justify-center bg-slate-950/35 px-4 pt-20 backdrop-blur-sm" onClick={() => setSelected(null)}>
+          <div className="glass-panel soft-pop max-h-[80vh] w-full max-w-2xl overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur">
+              <h3 className="font-semibold text-slate-900">{selected.name || "候选人详情"}</h3>
+              <button onClick={() => setSelected(null)} className="text-lg text-slate-400 transition hover:text-slate-700">×</button>
             </div>
             <div className="p-4 space-y-4">
               {/* 基本信息 */}
@@ -319,9 +324,9 @@ export default function ResumesPage() {
               <JsonPanel title="结构化画像 (CandidateProfile)" data={selected.profile || null} />
               {/* 原始文本 */}
               {selected.resume_text && (
-                <div className="border border-gray-200 rounded-lg p-3">
-                  <div className="text-xs text-gray-400 mb-1">原始简历文本</div>
-                  <pre className="text-xs text-gray-600 whitespace-pre-wrap max-h-48 overflow-auto">{selected.resume_text}</pre>
+                <div className="rounded-lg border border-slate-200 bg-white/70 p-3">
+                  <div className="mb-1 text-xs text-slate-400">原始简历文本</div>
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-xs text-slate-600">{selected.resume_text}</pre>
                 </div>
               )}
             </div>
@@ -336,8 +341,8 @@ function Info({ label, value }: { label: string; value?: string }) {
   if (!value) return null;
   return (
     <div>
-      <span className="text-gray-400">{label}:</span>{" "}
-      <span className="text-gray-700">{value}</span>
+      <span className="text-slate-400">{label}:</span>{" "}
+      <span className="text-slate-700">{value}</span>
     </div>
   );
 }

@@ -12,20 +12,22 @@ interface Props {
 
 export default function EmptyState({ title, description, action, onAction }: Props) {
   return (
-    <div className="text-center py-12 px-4">
+    <div className="glass-pad soft-enter px-4 py-12 text-center">
       {/* 图标 */}
-      <div className="text-4xl mb-3 text-gray-300">📋</div>
+      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200 bg-white/80 text-xl text-slate-400 shadow-sm">
+        □
+      </div>
       {/* 标题 */}
-      <h3 className="text-lg font-medium text-gray-500 mb-1">{title}</h3>
+      <h3 className="mb-1 text-lg font-semibold text-slate-700">{title}</h3>
       {/* 描述 */}
       {description && (
-        <p className="text-sm text-gray-400 mb-4">{description}</p>
+        <p className="mb-4 text-sm text-slate-500">{description}</p>
       )}
       {/* 操作按钮 */}
       {action && onAction && (
         <button
           onClick={onAction}
-          className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 transition-colors"
+          className="rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:bg-slate-800"
         >
           {action}
         </button>

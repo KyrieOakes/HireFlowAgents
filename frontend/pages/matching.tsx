@@ -3,8 +3,19 @@
 // ================================================================
 
 import { useEffect, useState, useRef } from "react";
-import type { Job, Candidate, RankedCandidate, MatchDetail } from "@/types";
-import { listJobs, listCandidates, runMatching, getRanking, getMatchDetail } from "@/services/api";
+import type { Job, Candidate, RankedCandidate, MatchDetail, InterviewQuestion, InterviewEvaluation, EmailDraft } from "@/types";
+import {
+  listJobs,
+  listCandidates,
+  runMatching,
+  getRanking,
+  getMatchDetail,
+  generateInterviewQuestions,
+  submitInterviewEvaluation,
+  createEmailDraft,
+  getEmailDrafts,
+  approveEmailDraft,
+} from "@/services/api";
 import LoadingButton from "@/components/LoadingButton";
 import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
@@ -27,6 +38,13 @@ export default function MatchingPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);  // 匹配耗时计时器
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const [selectedCandidateId, setSelectedCandidateId] = useState("");
+  const [questions, setQuestions] = useState<InterviewQuestion[]>([]);
+  const [evaluation, setEvaluation] = useState<InterviewEvaluation | null>(null);
+  const [drafts, setDrafts] = useState<EmailDraft[]>([]);
+  const [feedback, setFeedback] = useState("");
+  const [emailType, setEmailType] = useState<"interview_invite" | "rejection" | "follow_up" | "next_round">("interview_invite");
+  const [stageLoading, setStageLoading] = useState<Record<string, boolean>>({});
 
   // candidate_id → name 映射表 (用于显示姓名而非ID)
   const nameMap: Record<string, string> = {};
@@ -61,6 +79,11 @@ export default function MatchingPage() {
       const res = await runMatching(selectedJobId, limit);
       const rankRes = await getRanking(selectedJobId, limit);
       setRanked(rankRes.ranked_candidates);
+      setSelectedCandidateId(rankRes.ranked_candidates[0]?.candidate_id || "");
+      setQuestions([]);
+      setEvaluation(null);
+      setDrafts([]);
+      setFeedback("");
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -68,6 +91,52 @@ export default function MatchingPage() {
       matchLock.current = false;
       setMatching(false);
     }
+  }
+
+  async function withStageLoading(key: string, action: () => Promise<void>) {
+    setStageLoading((prev) => ({ ...prev, [key]: true }));
+    setError(null);
+    try {
+      await action();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setStageLoading((prev) => ({ ...prev, [key]: false }));
+    }
+  }
+
+  async function handleGenerateQuestions() {
+    if (!selectedJobId || !selectedCandidateId) return;
+    await withStageLoading("questions", async () => {
+      const res = await generateInterviewQuestions(selectedJobId, selectedCandidateId);
+      setQuestions(res.questions);
+    });
+  }
+
+  async function handleSubmitEvaluation() {
+    if (!selectedJobId || !selectedCandidateId || !feedback.trim()) return;
+    await withStageLoading("evaluation", async () => {
+      const res = await submitInterviewEvaluation(selectedJobId, selectedCandidateId, feedback.trim());
+      setEvaluation(res.evaluation);
+    });
+  }
+
+  async function handleCreateDraft() {
+    if (!selectedJobId || !selectedCandidateId) return;
+    await withStageLoading("draft", async () => {
+      await createEmailDraft(selectedJobId, selectedCandidateId, emailType);
+      const res = await getEmailDrafts(selectedJobId, selectedCandidateId);
+      setDrafts(res.drafts);
+    });
+  }
+
+  async function handleApproveDraft(emailId: string) {
+    if (!selectedJobId || !selectedCandidateId) return;
+    await withStageLoading(`approve-${emailId}`, async () => {
+      await approveEmailDraft(emailId);
+      const res = await getEmailDrafts(selectedJobId, selectedCandidateId);
+      setDrafts(res.drafts);
+    });
   }
 
   // 查看候选人详情 (防抖锁)
@@ -92,21 +161,32 @@ export default function MatchingPage() {
   }
 
   return (
-    <div>
-      <h1 className="text-xl font-bold text-gray-800 mb-6">匹配与排名</h1>
+    <div className="space-y-6 soft-enter">
+      <div className="glass-pad">
+        <p className="section-label">Matching Pipeline</p>
+        <h1 className="page-title mt-2">匹配与面试</h1>
+        <p className="page-subtitle">
+          先完成候选人排序，再基于风险点生成面试问题、结构化评价和 HR 邮件草稿。
+        </p>
+      </div>
 
       {error && <div className="mb-4"><ErrorMessage message={error} /></div>}
 
       {/* ---- 选择岗位 + 触发匹配 ---- */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6">
-        <h2 className="text-sm font-medium text-gray-700 mb-3">执行匹配</h2>
-        <div className="flex gap-3 items-end flex-wrap">
+      <div className="glass-pad">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">执行匹配</h2>
+            <p className="mt-1 text-sm text-slate-500">粗筛候选人后调用 Match Agent 和 Ranking Agent。</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs text-gray-500 mb-1">选择岗位</label>
+            <label className="mb-1 block text-xs font-medium text-slate-500">选择岗位</label>
             <select
               value={selectedJobId}
               onChange={(e) => setSelectedJobId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+              className="field"
             >
               <option value="">— 请选择已解析的岗位 —</option>
               {jobs.filter((j) => (j.has_profile || j.jd_profile)).map((j) => (
@@ -115,11 +195,11 @@ export default function MatchingPage() {
             </select>
           </div>
           <div className="w-32">
-            <label className="block text-xs text-gray-500 mb-1">匹配人数</label>
+            <label className="mb-1 block text-xs font-medium text-slate-500">匹配人数</label>
             <select
               value={limit}
               onChange={(e) => setLimit(Number(e.target.value))}
-              className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+              className="field"
             >
               <option value={5}>Top 5</option>
               <option value={10}>Top 10</option>
@@ -133,21 +213,21 @@ export default function MatchingPage() {
         </div>
         {/* 匹配进度提示 */}
         {matching && (
-          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50/80 p-3 backdrop-blur">
             <div className="flex items-center gap-3">
               <svg className="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="none">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
               </svg>
-              <span className="text-sm text-blue-700">
-                正在匹配中... 正在调用 JD Agent + Resume Agent + Match Agent + Ranking Agent
+              <span className="text-sm text-sky-700">
+                正在匹配中... 正在调用 RAG 证据检索 + Match Agent + Ranking Agent
               </span>
             </div>
-            <p className="text-xs text-blue-400 mt-2">已等待 {elapsed} 秒 | 本地模型处理中, 请耐心等候</p>
+            <p className="mt-2 text-xs text-sky-500">已等待 {elapsed} 秒 | 本地模型处理中, 请耐心等候</p>
           </div>
         )}
         {jobs.filter((j) => (j.has_profile || j.jd_profile)).length === 0 && (
-          <p className="text-xs text-gray-400 mt-2">还没有已解析的岗位，请先到「岗位管理」创建并解析JD。</p>
+          <p className="mt-2 text-xs text-slate-400">还没有已解析的岗位，请先到「岗位」创建并解析 JD。</p>
         )}
       </div>
 
@@ -156,26 +236,34 @@ export default function MatchingPage() {
         <EmptyState title="还没有排名结果" description="选择一个岗位后点击「开始匹配」" />
       ) : (
         <>
-          <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">排名结果</h2>
-          <div className="space-y-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="section-label">排名结果</h2>
+            <span className="text-xs text-slate-400">点击候选人后可进入面试跟进</span>
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+            <div className="space-y-4">
             {ranked.map((c, i) => (
-              <div key={c.candidate_id} className="bg-white border border-gray-200 rounded-lg p-4">
+              <div
+                key={c.candidate_id}
+                className={`focus-card cursor-pointer p-4 ${selectedCandidateId === c.candidate_id ? "border-sky-300 ring-2 ring-sky-100" : ""}`}
+                onClick={() => setSelectedCandidateId(c.candidate_id)}
+              >
                 {/* 头部: 排名 + ID + 分数 + 等级 */}
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
                     {/* 排名数字 */}
-                    <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white ${
-                      i === 0 ? "bg-yellow-500" : i === 1 ? "bg-gray-400" : i === 2 ? "bg-amber-600" : "bg-gray-300"
+                    <span className={`flex h-9 w-9 items-center justify-center rounded-md text-sm font-bold text-white ${
+                      i === 0 ? "bg-slate-950" : i === 1 ? "bg-slate-600" : i === 2 ? "bg-sky-600" : "bg-slate-300"
                     }`}>
                       {c.rank}
                     </span>
                     <div>
-                      <span className="font-medium text-gray-800">{nameMap[c.candidate_id] || c.candidate_id}</span>
-                      <span className="text-xs text-gray-400 ml-2">总分</span>
+                      <span className="font-semibold text-slate-900">{nameMap[c.candidate_id] || c.candidate_id}</span>
+                      <span className="ml-2 text-xs text-slate-400">总分</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="text-lg font-bold text-gray-800">{c.total_score}<span className="text-sm font-normal text-gray-400">/100</span></span>
+                    <span className="text-lg font-bold text-slate-900">{c.total_score}<span className="text-sm font-normal text-slate-400">/100</span></span>
                     <StatusBadge level={c.recommendation} />
                   </div>
                 </div>
@@ -186,10 +274,10 @@ export default function MatchingPage() {
                 {/* 优势 + 风险 */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
                   {/* 优势 */}
-                  <div>
-                    <div className="text-xs text-green-600 font-medium mb-1">✅ 优势</div>
+                  <div className="rounded-md bg-emerald-50/70 p-3">
+                    <div className="mb-1 text-xs font-semibold text-emerald-700">优势</div>
                     {c.strengths?.length > 0 ? (
-                      <ul className="text-xs text-gray-600 space-y-0.5">
+                      <ul className="space-y-0.5 text-xs text-slate-600">
                         {c.strengths.slice(0, 2).map((s, idx) => (
                           <li key={idx} className="truncate">{s}</li>
                         ))}
@@ -197,10 +285,10 @@ export default function MatchingPage() {
                     ) : <span className="text-xs text-gray-400">暂无</span>}
                   </div>
                   {/* 风险 */}
-                  <div>
-                    <div className="text-xs text-red-500 font-medium mb-1">⚠️ 风险</div>
+                  <div className="rounded-md bg-rose-50/70 p-3">
+                    <div className="mb-1 text-xs font-semibold text-rose-700">风险</div>
                     {c.risks?.length > 0 ? (
-                      <ul className="text-xs text-gray-600 space-y-0.5">
+                      <ul className="space-y-0.5 text-xs text-slate-600">
                         {c.risks.slice(0, 2).map((r, idx) => (
                           <li key={idx} className="truncate">{r}</li>
                         ))}
@@ -221,29 +309,46 @@ export default function MatchingPage() {
                 </div>
               </div>
             ))}
+            </div>
+            <InterviewPanel
+              candidateId={selectedCandidateId}
+              candidateName={nameMap[selectedCandidateId] || selectedCandidateId}
+              questions={questions}
+              evaluation={evaluation}
+              drafts={drafts}
+              feedback={feedback}
+              emailType={emailType}
+              loading={stageLoading}
+              onFeedbackChange={setFeedback}
+              onEmailTypeChange={setEmailType}
+              onGenerateQuestions={handleGenerateQuestions}
+              onSubmitEvaluation={handleSubmitEvaluation}
+              onCreateDraft={handleCreateDraft}
+              onApproveDraft={handleApproveDraft}
+            />
           </div>
         </>
       )}
 
       {/* ---- 候选人详细评分弹层 ---- */}
       {detail && (
-        <div className="fixed inset-0 bg-black/30 z-20 flex items-start justify-center pt-20" onClick={() => setDetail(null)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-xl w-full mx-4 max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 bg-white">
-              <h3 className="font-medium">详细评分</h3>
-              <button onClick={() => setDetail(null)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        <div className="fixed inset-0 z-20 flex items-start justify-center bg-slate-950/35 px-4 pt-20 backdrop-blur-sm" onClick={() => setDetail(null)}>
+          <div className="glass-panel soft-pop max-h-[80vh] w-full max-w-xl overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur">
+              <h3 className="font-semibold text-slate-900">详细评分</h3>
+              <button onClick={() => setDetail(null)} className="text-lg text-slate-400 transition hover:text-slate-700">×</button>
             </div>
             <div className="p-4 space-y-4">
               {/* 总分 + 等级 */}
               <div className="flex items-center gap-3">
-                <span className="text-2xl font-bold text-gray-800">{detail.total_score}</span>
-                <span className="text-sm text-gray-400">/ 100</span>
+                <span className="text-3xl font-semibold tracking-tight text-slate-950">{detail.total_score}</span>
+                <span className="text-sm text-slate-400">/ 100</span>
                 <StatusBadge level={detail.recommendation} />
               </div>
 
               {/* 各维度分数 */}
               <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-2">维度得分</h4>
+                <h4 className="mb-2 text-sm font-semibold text-slate-700">维度得分</h4>
                 <div className="space-y-1.5">
                   {detail.dimension_scores && Object.entries(detail.dimension_scores).map(([key, val]) => (
                     <ScoreBar key={key} label={dimLabel(key)} score={val} maxScore={30} />
@@ -254,13 +359,13 @@ export default function MatchingPage() {
               {/* 证据 */}
               {detail.evidence && detail.evidence.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">支撑证据</h4>
+                  <h4 className="mb-2 text-sm font-semibold text-slate-700">支撑证据</h4>
                   <div className="space-y-2">
                     {detail.evidence.map((ev, i) => (
-                      <div key={i} className="bg-gray-50 rounded p-2 text-xs">
-                        <div className="text-gray-700 font-medium">{ev.claim}</div>
-                        <div className="text-gray-500 mt-0.5">{ev.text}</div>
-                        <div className="text-gray-400 mt-0.5">来源: {ev.source}</div>
+                      <div key={i} className="rounded-md bg-slate-50 p-3 text-xs">
+                        <div className="font-semibold text-slate-700">{ev.claim || `证据 ${i + 1}`}</div>
+                        <div className="mt-1 text-slate-500">{ev.text}</div>
+                        <div className="mt-1 text-slate-400">来源: {ev.source || ev.metadata?.source || "简历片段"}</div>
                       </div>
                     ))}
                   </div>
@@ -270,15 +375,15 @@ export default function MatchingPage() {
               {/* 优势+风险 */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <h4 className="text-sm font-medium text-green-700 mb-1">优势</h4>
-                  <ul className="text-xs text-gray-600 space-y-0.5">
-                    {detail.strengths?.map((s, i) => <li key={i}>✅ {s}</li>) || <li className="text-gray-400">暂无</li>}
+                  <h4 className="mb-1 text-sm font-semibold text-emerald-700">优势</h4>
+                  <ul className="space-y-0.5 text-xs text-slate-600">
+                    {detail.strengths?.map((s, i) => <li key={i}>{s}</li>) || <li className="text-slate-400">暂无</li>}
                   </ul>
                 </div>
                 <div>
-                  <h4 className="text-sm font-medium text-red-600 mb-1">风险</h4>
-                  <ul className="text-xs text-gray-600 space-y-0.5">
-                    {detail.risks?.map((r, i) => <li key={i}>⚠️ {r}</li>) || <li className="text-gray-400">暂无</li>}
+                  <h4 className="mb-1 text-sm font-semibold text-rose-700">风险</h4>
+                  <ul className="space-y-0.5 text-xs text-slate-600">
+                    {detail.risks?.map((r, i) => <li key={i}>{r}</li>) || <li className="text-slate-400">暂无</li>}
                   </ul>
                 </div>
               </div>
@@ -286,8 +391,8 @@ export default function MatchingPage() {
               {/* 总结 */}
               {detail.summary && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-1">匹配总结</h4>
-                  <p className="text-sm text-gray-600">{detail.summary}</p>
+                  <h4 className="mb-1 text-sm font-semibold text-slate-700">匹配总结</h4>
+                  <p className="text-sm leading-6 text-slate-600">{detail.summary}</p>
                 </div>
               )}
             </div>
@@ -296,6 +401,175 @@ export default function MatchingPage() {
       )}
     </div>
   );
+}
+
+function InterviewPanel({
+  candidateId,
+  candidateName,
+  questions,
+  evaluation,
+  drafts,
+  feedback,
+  emailType,
+  loading,
+  onFeedbackChange,
+  onEmailTypeChange,
+  onGenerateQuestions,
+  onSubmitEvaluation,
+  onCreateDraft,
+  onApproveDraft,
+}: {
+  candidateId: string;
+  candidateName: string;
+  questions: InterviewQuestion[];
+  evaluation: InterviewEvaluation | null;
+  drafts: EmailDraft[];
+  feedback: string;
+  emailType: "interview_invite" | "rejection" | "follow_up" | "next_round";
+  loading: Record<string, boolean>;
+  onFeedbackChange: (value: string) => void;
+  onEmailTypeChange: (value: "interview_invite" | "rejection" | "follow_up" | "next_round") => void;
+  onGenerateQuestions: () => void;
+  onSubmitEvaluation: () => void;
+  onCreateDraft: () => void;
+  onApproveDraft: (emailId: string) => void;
+}) {
+  if (!candidateId) {
+    return (
+      <div className="glass-pad h-fit">
+        <p className="section-label">面试跟进</p>
+        <h3 className="mt-2 text-lg font-semibold text-slate-900">选择候选人</h3>
+        <p className="mt-2 text-sm leading-6 text-slate-500">
+          匹配完成后，点击左侧候选人即可生成面试问题、提交反馈并创建邮件草稿。
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <aside className="glass-pad sticky top-24 h-fit space-y-5">
+      <div>
+        <p className="section-label">面试跟进</p>
+        <h3 className="mt-2 text-lg font-semibold text-slate-950">{candidateName}</h3>
+        <p className="mt-1 text-xs text-slate-400">{candidateId}</p>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white/70 p-4 backdrop-blur">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h4 className="text-sm font-semibold text-slate-900">面试问题</h4>
+            <p className="mt-1 text-xs text-slate-500">围绕技术、项目和风险点生成问题。</p>
+          </div>
+          <LoadingButton onClick={onGenerateQuestions} loading={!!loading.questions} variant="secondary">
+            生成
+          </LoadingButton>
+        </div>
+        {questions.length > 0 ? (
+          <div className="space-y-2">
+            {questions.map((q) => (
+              <div key={q.question_id || q.question} className="rounded-md bg-slate-50 p-3">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="chip-blue">{questionTypeLabel(q.question_type)}</span>
+                </div>
+                <p className="text-sm font-medium leading-6 text-slate-800">{q.question}</p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">{q.purpose}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-md bg-slate-50 p-3 text-sm text-slate-500">还没有生成面试问题。</p>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white/70 p-4 backdrop-blur">
+        <h4 className="text-sm font-semibold text-slate-900">面试评价</h4>
+        <textarea
+          value={feedback}
+          onChange={(e) => onFeedbackChange(e.target.value)}
+          rows={5}
+          className="field mt-3 resize-y"
+          placeholder="填写面试官反馈，例如技术回答、沟通表现、风险点是否澄清..."
+        />
+        <div className="mt-3">
+          <LoadingButton onClick={onSubmitEvaluation} loading={!!loading.evaluation} disabled={!feedback.trim()}>
+            生成评价
+          </LoadingButton>
+        </div>
+        {evaluation && (
+          <div className="mt-4 rounded-md bg-slate-50 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-sm font-semibold text-slate-900">{evaluation.recommendation}</span>
+              {evaluation.requires_human_review && <span className="chip">需人工审核</span>}
+            </div>
+            <p className="text-sm leading-6 text-slate-600">{evaluation.summary}</p>
+            {evaluation.concerns?.length > 0 && (
+              <div className="mt-3">
+                <p className="mb-1 text-xs font-semibold text-rose-700">关注点</p>
+                <ul className="space-y-1 text-xs text-slate-600">
+                  {evaluation.concerns.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white/70 p-4 backdrop-blur">
+        <h4 className="text-sm font-semibold text-slate-900">邮件草稿</h4>
+        <div className="mt-3 flex gap-2">
+          <select
+            value={emailType}
+            onChange={(e) => onEmailTypeChange(e.target.value as any)}
+            className="field"
+          >
+            <option value="interview_invite">面试邀请</option>
+            <option value="next_round">下一轮通知</option>
+            <option value="follow_up">跟进邮件</option>
+            <option value="rejection">拒信</option>
+          </select>
+          <LoadingButton onClick={onCreateDraft} loading={!!loading.draft}>
+            生成
+          </LoadingButton>
+        </div>
+        {drafts.length > 0 ? (
+          <div className="mt-3 space-y-3">
+            {drafts.map((draft) => (
+              <div key={draft.email_id} className="rounded-md bg-slate-50 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-slate-900">{draft.subject}</span>
+                  <span className={draft.status === "approved" ? "chip-green" : "chip"}>{draft.status}</span>
+                </div>
+                <pre className="max-h-36 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-600">{draft.body}</pre>
+                {draft.status !== "approved" && (
+                  <div className="mt-3">
+                    <LoadingButton
+                      onClick={() => onApproveDraft(draft.email_id)}
+                      loading={!!loading[`approve-${draft.email_id}`]}
+                      variant="secondary"
+                    >
+                      批准草稿
+                    </LoadingButton>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm text-slate-500">还没有邮件草稿。</p>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function questionTypeLabel(type: string): string {
+  const map: Record<string, string> = {
+    technical: "技术",
+    project_deep_dive: "项目深挖",
+    behavioral: "行为",
+    risk_verification: "风险验证",
+  };
+  return map[type] || type;
 }
 
 /** 维度字段 → 中文 */

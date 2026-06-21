@@ -52,57 +52,66 @@ export default function Dashboard() {
   const parsedCandidates = candidates.filter((c) => c.has_profile || c.profile);
 
   return (
-    <div>
-      <h1 className="text-xl font-bold text-gray-800 mb-6">工作台</h1>
+    <div className="space-y-6 soft-enter">
+      <div className="glass-pad overflow-hidden">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="section-label">HireFlow Command Center</p>
+            <h1 className="page-title mt-2">招聘筛选工作台</h1>
+            <p className="page-subtitle">
+              管理岗位、候选人、匹配排名和面试跟进，一条流程完成从 JD 到邮件草稿的辅助决策。
+            </p>
+          </div>
+          <button
+            onClick={loadData}
+            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white/70 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm backdrop-blur transition duration-200 hover:-translate-y-0.5 hover:bg-white"
+          >
+            刷新数据
+          </button>
+        </div>
+      </div>
 
       {/* 错误提示 */}
       {error && <ErrorMessage message={error} onRetry={loadData} />}
 
       {/* 统计卡片 */}
       {!error && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          <StatCard label="岗位总数" value={jobs.length} href="/jobs" />
-          <StatCard label="已解析岗位" value={parsedJobs.length} hint={`/ ${jobs.length}`} href="/jobs" />
-          <StatCard label="候选人总数" value={candidates.length} href="/resumes" />
-          <StatCard label="已解析简历" value={parsedCandidates.length} hint={`/ ${candidates.length}`} href="/resumes" />
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <StatCard label="岗位总数" value={jobs.length} href="/jobs" accent="slate" />
+          <StatCard label="已解析岗位" value={parsedJobs.length} hint={`/ ${jobs.length}`} href="/jobs" accent="sky" />
+          <StatCard label="候选人总数" value={candidates.length} href="/resumes" accent="slate" />
+          <StatCard label="已解析简历" value={parsedCandidates.length} hint={`/ ${candidates.length}`} href="/resumes" accent="emerald" />
         </div>
       )}
 
       {/* 快捷操作 */}
-      <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">快捷操作</h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <QuickCard title="创建岗位" desc="粘贴岗位描述，提取结构化 JD 和评分 Rubric" href="/jobs" step="01" disabled={false} />
+        <QuickCard title="录入简历" desc="上传 PDF/DOCX/TXT，解析画像并建立 RAG 索引" href="/resumes" step="02" disabled={false} />
         <QuickCard
-          title="创建岗位"
-          desc="粘贴岗位描述，调用 JD Agent 解析"
-          href="/jobs"
-          disabled={false}
-        />
-        <QuickCard
-          title="录入简历"
-          desc="粘贴简历文本，调用 Resume Agent 解析"
-          href="/resumes"
-          disabled={false}
-        />
-        <QuickCard
-          title="执行匹配"
-          desc="对候选人进行评分和排序"
+          title="匹配与面试"
+          desc="执行排序，生成面试问题、评价和邮件草稿"
           href="/matching"
+          step="03"
           disabled={parsedJobs.length === 0 || parsedCandidates.length === 0}
-          disabledHint={
-            !parsedJobs.length
-              ? "请先创建并解析岗位"
-              : !parsedCandidates.length
-                ? "请先录入并解析简历"
-                : undefined
-          }
+          disabledHint={!parsedJobs.length ? "请先解析岗位" : !parsedCandidates.length ? "请先解析简历" : undefined}
         />
       </div>
 
       {/* 流程提示 */}
-      <div className="mt-8 p-4 bg-blue-50 border border-blue-100 rounded-lg">
-        <p className="text-sm text-blue-700">
-          <span className="font-medium">使用流程:</span> 创建岗位 → 解析JD → 录入简历 → 解析简历 → 执行匹配 → 查看排名
-        </p>
+      <div className="glass-pad">
+        <p className="section-label mb-4">当前流程</p>
+        <div className="grid gap-3 md:grid-cols-5">
+          {["JD 解析", "简历画像", "RAG 证据", "匹配排序", "面试跟进"].map((step, index) => (
+            <div key={step} className="rounded-lg border border-slate-200 bg-white/70 p-3 backdrop-blur">
+              <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-slate-950 text-xs font-semibold text-white">
+                {index + 1}
+              </div>
+              <div className="text-sm font-semibold text-slate-800">{step}</div>
+              <div className="mt-1 text-xs text-slate-500">{index < 4 ? "进入下一步" : "人工确认"}</div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -115,24 +124,38 @@ function StatCard({
   value,
   hint,
   href,
+  accent,
 }: {
   label: string;
   value: number;
   hint?: string;
   href: string;
+  accent: "slate" | "sky" | "emerald";
 }) {
+  const accentClass = {
+    slate: "text-slate-950 bg-slate-100",
+    sky: "text-sky-700 bg-sky-50",
+    emerald: "text-emerald-700 bg-emerald-50",
+  }[accent];
+
   return (
     <Link
       href={href}
-      className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow transition-shadow"
+      className="focus-card p-4"
     >
-      <div className="text-2xl font-bold text-gray-800">
-        {value}
-        {hint && <span className="text-sm font-normal text-gray-400 ml-1">{hint}</span>}
+      <div className={`mb-3 inline-flex rounded-md px-2.5 py-1 text-xs font-semibold ${accentClass}`}>
+        {label}
       </div>
-      <div className="text-sm text-gray-500 mt-1">{label}</div>
+      <div className="text-3xl font-semibold tracking-tight text-slate-950">
+        {loadingNumber(value)}
+        {hint && <span className="ml-1 text-sm font-normal text-slate-400">{hint}</span>}
+      </div>
     </Link>
   );
+}
+
+function loadingNumber(value: number) {
+  return Number.isFinite(value) ? value : 0;
 }
 
 // ---- 快捷操作卡片 ----
@@ -141,20 +164,23 @@ function QuickCard({
   title,
   desc,
   href,
+  step,
   disabled,
   disabledHint,
 }: {
   title: string;
   desc: string;
   href: string;
+  step: string;
   disabled: boolean;
   disabledHint?: string;
 }) {
   if (disabled) {
     return (
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 opacity-60 cursor-not-allowed">
-        <h3 className="font-medium text-gray-500 mb-1">{title}</h3>
-        <p className="text-xs text-gray-400">{disabledHint || desc}</p>
+      <div className="rounded-lg border border-slate-200 bg-white/45 p-5 opacity-70 backdrop-blur">
+        <div className="mb-4 text-xs font-semibold text-slate-400">{step}</div>
+        <h3 className="mb-1 font-semibold text-slate-500">{title}</h3>
+        <p className="text-sm text-slate-400">{disabledHint || desc}</p>
       </div>
     );
   }
@@ -162,10 +188,14 @@ function QuickCard({
   return (
     <Link
       href={href}
-      className="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow transition-all"
+      className="focus-card group p-5"
     >
-      <h3 className="font-medium text-gray-800 mb-1">{title}</h3>
-      <p className="text-xs text-gray-500">{desc}</p>
+      <div className="mb-4 flex items-center justify-between">
+        <span className="text-xs font-semibold text-slate-400">{step}</span>
+        <span className="text-sm text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-sky-600">→</span>
+      </div>
+      <h3 className="mb-1 font-semibold text-slate-900">{title}</h3>
+      <p className="text-sm leading-6 text-slate-500">{desc}</p>
     </Link>
   );
 }
