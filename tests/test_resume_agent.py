@@ -144,3 +144,114 @@ def test_parse_resume_cleans_corrupted_llm_output():
         assert result["education"] == []
         assert result["work_experience"][0]["description"] == ["参与用户管理系统开发和测试。"]
     asyncio.run(run())
+
+
+def test_parse_resume_uses_raw_text_when_llm_semantic_fields_are_wrong():
+    """验证 LLM 把章节标题当姓名、把列表打乱时，原文解析结果优先。"""
+    async def run():
+        from app.agents.resume_agent import parse_resume
+        from app.schemas.resume_schema import CandidateProfile, Education, Project, WorkExperience
+
+        resume_text = """范瑞杰
++86 153-9764-7192 | 2297734484@qq.com
+GitHub: https://github.com/KyrieOakes?tab=repositories
+
+求职方向
+AI 产品助理 / 数据产品分析师 / AI 应用与数字化方向
+
+教育经历
+悉尼科技大学
+人工智能 硕士
+2025.02 - 2026.12
+
+悉尼大学
+数据科学 本科
+2022.02 - 2024.12
+
+项目经历
+
+HireFlowAgents：AI 招聘辅助平台
+2026.06 - 2026.07
+设计并开发一个面向招聘场景的 AI Agent 系统，目标是提升简历筛选、岗位匹配、候选人排序和面试准备的效率。
+参与 FastAPI 接口设计，包括 workflow 启动、状态查询和审核后恢复流程。
+
+Local RAG System：企业知识库问答系统
+2026.05 - 2026.06
+构建本地知识库问答系统，用于解决企业内部文档检索效率低、知识分散和问答不可追溯等问题。
+设计 retrieval evaluation 指标体系，使用 Recall@K、Precision@K、MRR、NDCG@K 分析系统检索质量。
+
+Financial News Sentiment Classification：金融新闻情绪分析
+2025.08 - 2025.10
+基于金融新闻标题构建情绪分类模型，帮助用户快速判断新闻可能带来的市场情绪影响。
+使用 BERT 微调模型，并通过 accuracy、F1-score 和 confusion matrix 评估模型表现。
+
+卡片风险预测与机器学习建模
+2025.02 - 2025.04
+基于结构化数据完成风险预测建模，负责数据清洗、特征工程、多模型训练和结果对比。
+通过 Logistic Regression、Random Forest、XGBoost、SVM 等模型对比。
+
+实习经历
+四川 CA
+产品研发实习生
+2024.01 - 2024.02
+参与用户管理系统开发和测试，了解企业级平台、数字认证产品和客户服务流程。
+学习数字认证、权限管理和基础加密概念，理解安全产品在政企客户中的应用场景。
+
+技能
+AI 产品与应用：RAG · AI Agent · LangGraph · Workflow Design · Human-in-the-Loop · LLM 应用
+数据分析：Pandas · NumPy · Matplotlib · 数据清洗 · 特征工程 · 指标评估
+机器学习：Scikit-learn · BERT · XGBoost · Random Forest · SVM · Logistic Regression
+后端与接口：FastAPI · Pydantic · SQL · RESTful API
+项目协作：Git/GitHub · pytest · Docker · Scrum · Jupyter Notebook"""
+
+        with patch("app.agents.resume_agent.call_llm_structured") as mock:
+            mock.return_value = CandidateProfile(
+                candidate_id="C001",
+                name="求职方向",
+                email="2297734484@qq.com",
+                phone="+86 153-9764-7192",
+                education=[
+                    Education(degree=", }", school="悉尼科技大学", major="")
+                ],
+                skills=[", }, {,}, {}, {} ],", '"+86 153-9764-7192"],,'],
+                projects=[
+                    Project(
+                        name="HireFlowAgents：AI 招聘辅助平台",
+                        description="",
+                        technologies=["RAG", "FastAPI"],
+                        role="设计并开发",
+                    )
+                ],
+                work_experience=[
+                    WorkExperience(
+                        company="",
+                        title="",
+                        duration="—",
+                        description=["参与用户管理系统开发和测试。"],
+                    )
+                ],
+                certifications=[],
+                strengths=[],
+                risks=[],
+                missing_info=[],
+                estimated_years_of_experience=None,
+            )
+
+            result = await parse_resume(resume_text, "C001")
+
+        assert result["name"] == "范瑞杰"
+        assert result["email"] == "2297734484@qq.com"
+        assert result["phone"] == "+86 153-9764-7192"
+        assert len(result["education"]) == 2
+        assert result["education"][0]["school"] == "悉尼科技大学"
+        assert result["education"][0]["degree"] == "硕士"
+        assert result["education"][1]["school"] == "悉尼大学"
+        assert result["education"][1]["degree"] == "学士"
+        assert len(result["projects"]) == 4
+        assert result["projects"][0]["name"] == "HireFlowAgents：AI 招聘辅助平台"
+        assert len(result["work_experience"]) == 1
+        assert result["work_experience"][0]["company"] == "四川 CA"
+        assert "RAG" in result["skills"]
+        assert "FastAPI" in result["skills"]
+        assert all("{" not in skill and "}" not in skill for skill in result["skills"])
+    asyncio.run(run())

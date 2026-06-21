@@ -77,7 +77,16 @@ def test_create_and_get_candidate(db: Session):
 
 
 def test_update_candidate_profile(db: Session):
+    """用户手动填写的候选人姓名，不会被解析结果覆盖。"""
     c = crud.create_candidate(db, "简历文本", "张三")
+    profile = {"name": "张三丰", "skills": ["Python"]}
+    updated = crud.update_candidate_profile(db, c.candidate_id, profile)
+    assert updated.name == "张三"
+
+
+def test_auto_named_candidate_can_use_parsed_real_name(db: Session):
+    """系统自动生成的申请人名称，可以被解析出的真实姓名替换。"""
+    c = crud.create_candidate(db, "简历文本", "申请人A")
     profile = {"name": "张三丰", "skills": ["Python"]}
     updated = crud.update_candidate_profile(db, c.candidate_id, profile)
     assert updated.name == "张三丰"

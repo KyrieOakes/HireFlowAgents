@@ -173,8 +173,7 @@ def update_candidate_profile(
         is_real_name = bool(new_name) and not new_name.startswith("申请人")
         if is_auto_named and is_real_name:
             candidate.name = new_name
-        elif not is_auto_named and new_name:
-            candidate.name = new_name
+        # 如果用户上传时手动填写了姓名，就尊重用户输入，不用解析结果覆盖。
         if profile.get("email"):
             candidate.email = profile["email"]
         db.commit()

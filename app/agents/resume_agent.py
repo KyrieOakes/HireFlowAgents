@@ -18,6 +18,29 @@ from app.schemas.resume_schema import CandidateProfile
 from app.utils.config import settings
 
 
+SECTION_TITLES = {
+    "求职方向",
+    "教育经历",
+    "项目经历",
+    "实习经历",
+    "工作经历",
+    "技能",
+    "专业技能",
+    "证书",
+    "证书认证",
+}
+
+
+TECH_KEYWORDS = [
+    "Python", "RAG", "AI Agent", "LangGraph", "FastAPI", "Pydantic",
+    "SQL", "RESTful API", "Pandas", "NumPy", "Matplotlib",
+    "Scikit-learn", "BERT", "XGBoost", "Random Forest", "SVM",
+    "Logistic Regression", "Git", "GitHub", "pytest", "Docker",
+    "Scrum", "Jupyter Notebook", "LLM", "Workflow Design",
+    "Human-in-the-Loop",
+]
+
+
 def _has_surrogate_char(text: str) -> bool:
     """
     判断字符串里是否含有无效代理字符。
@@ -45,14 +68,32 @@ def _looks_corrupted(text: str) -> bool:
     escape_count = len(re.findall(r"\\u[dD][0-9a-fA-F]{3}|\\x[0-9a-fA-F]{2}|%[0-9a-fA-F]{2}", text))
     hangul_count = len(re.findall(r"[\uac00-\ud7af]", text))
     slash_count = text.count("\\")
+    punctuation_count = len(re.findall(r"[{}\[\]\",]", text))
     surrogate_count = 1 if _has_surrogate_char(text) else 0
 
     # 短字段里只要出现一次明显乱码标记，就应该丢弃，避免姓名/学校被污染。
     if len(text) < 80 and (escape_count or surrogate_count or slash_count >= 2):
         return True
 
+    # 只有 JSON 残片、括号和逗号的内容不是有效简历字段。
+    if punctuation_count / max(len(text), 1) > 0.35:
+        return True
+
+    # 技能/经历里混进联系方式时，通常是模型把原文结构打散了。
+    if _extract_email(text) or _extract_phone(text):
+        return True
+
     bad_score = escape_count * 3 + hangul_count + slash_count + surrogate_count * 5
     return bad_score / max(len(text), 1) > 0.08
+
+
+def _is_section_title(text: str) -> bool:
+    """
+    判断一行文本是否是简历章节标题。
+
+    章节标题不能被当成候选人姓名、学校或公司名。
+    """
+    return _clean_text(text).strip() in SECTION_TITLES
 
 
 def _clean_text(value: Any, *, drop_if_corrupted: bool = False) -> str:
@@ -111,9 +152,23 @@ def _clean_name(value: Any) -> str:
     name = re.sub(r"\s{2,}", " ", name).strip()
 
     # 如果误把一整行联系方式或技能标题当成姓名，宁可置空。
-    if len(name) > 40 or re.search(r"邮箱|电话|手机|技能|项目|教育|工作", name):
+    if len(name) > 40 or _is_section_title(name) or re.search(r"邮箱|电话|手机|技能|项目|教育|工作|求职", name):
         return ""
     return name
+
+
+def _normalize_resume_lines(resume_text: str) -> List[str]:
+    """
+    把简历原文整理成非空行列表。
+
+    前端文本框、PDF 和 DOCX 提取出来的换行风格可能不同，
+    先统一清理，后面的规则解析才稳定。
+    """
+    return [
+        _clean_text(line)
+        for line in (resume_text or "").splitlines()
+        if _clean_text(line)
+    ]
 
 
 def _extract_email(text: str) -> str:
@@ -156,11 +211,13 @@ def _extract_contact_info(resume_text: str) -> Dict[str, str]:
     if name_match:
         contact["name"] = _clean_name(name_match.group(1))
 
-    # 如果没有标签，取第一行像姓名的短文本作为兜底。
+    # 如果没有标签，从简历开头的联系方式区域找一个像姓名的短行。
     if not contact["name"]:
-        for raw_line in text.splitlines()[:6]:
+        for raw_line in _normalize_resume_lines(text)[:8]:
             # 带冒号的行通常是字段说明，不能整行当姓名。
             if ":" in raw_line or "：" in raw_line:
+                continue
+            if "|" in raw_line or _is_section_title(raw_line):
                 continue
             line = _clean_name(raw_line)
             # 中文姓名通常 2-6 个汉字，英文姓名通常是 2-4 个单词。
@@ -171,6 +228,194 @@ def _extract_contact_info(resume_text: str) -> Dict[str, str]:
                 break
 
     return contact
+
+
+def _split_resume_sections(resume_text: str) -> Dict[str, List[str]]:
+    """
+    按常见中文简历标题切分原文。
+
+    这样可以在 LLM 结构化输出不稳定时，从原文稳定抽取教育、项目、技能等字段。
+    """
+    sections: Dict[str, List[str]] = {"_header": []}
+    current = "_header"
+    for line in _normalize_resume_lines(resume_text):
+        if _is_section_title(line):
+            current = line
+            sections.setdefault(current, [])
+            continue
+        sections.setdefault(current, []).append(line)
+    return sections
+
+
+def _parse_date_range(line: str) -> tuple[int | None, int | None]:
+    """
+    从一行时间文本里提取开始年份和结束年份。
+
+    例如 "2025.02 - 2026.12" 会得到 (2025, 2026)。
+    """
+    years = [int(year) for year in re.findall(r"(?:19|20)\d{2}", line or "")]
+    if not years:
+        return None, None
+    if len(years) == 1:
+        return years[0], None
+    return years[0], years[-1]
+
+
+def _is_date_line(line: str) -> bool:
+    """判断一行是否主要表示时间范围。"""
+    return bool(re.search(r"(?:19|20)\d{2}[./年-]?", line or ""))
+
+
+def _extract_education_from_text(sections: Dict[str, List[str]]) -> List[Dict[str, Any]]:
+    """
+    从“教育经历”段落抽取教育信息。
+
+    规则按中文简历常见写法设计: 学校名、专业/学位、时间范围三行一组。
+    """
+    lines = sections.get("教育经历", [])
+    education: List[Dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        school = _clean_text(lines[index], drop_if_corrupted=True)
+        if not school or _is_date_line(school):
+            index += 1
+            continue
+
+        major_degree = _clean_text(lines[index + 1], drop_if_corrupted=True) if index + 1 < len(lines) else ""
+        date_line = _clean_text(lines[index + 2], drop_if_corrupted=True) if index + 2 < len(lines) else ""
+        if not _is_date_line(date_line):
+            index += 1
+            continue
+
+        degree = ""
+        for degree_word in ["博士", "硕士", "本科", "学士", "研究生"]:
+            if degree_word in major_degree:
+                degree = "学士" if degree_word == "本科" else degree_word
+                break
+        major = major_degree
+        for degree_word in ["博士", "硕士", "本科", "学士", "研究生"]:
+            major = major.replace(degree_word, "")
+        start_year, end_year = _parse_date_range(date_line)
+        education.append({
+            "degree": degree,
+            "school": school,
+            "major": major.strip(),
+            "start_year": start_year,
+            "end_year": end_year,
+        })
+        index += 3
+    return education
+
+
+def _extract_skills_from_text(sections: Dict[str, List[str]]) -> List[str]:
+    """
+    从“技能/专业技能”段落抽取技能关键词。
+
+    保留冒号后的具体技能，并按顿号、圆点和逗号切分。
+    """
+    lines = sections.get("技能", []) + sections.get("专业技能", [])
+    skills: List[str] = []
+    seen = set()
+    for line in lines:
+        content = re.split(r"[:：]", line, maxsplit=1)[-1]
+        parts = re.split(r"[·、,，/]+", content)
+        for part in parts:
+            skill = _clean_text(part, drop_if_corrupted=True)
+            if skill and skill not in seen:
+                skills.append(skill)
+                seen.add(skill)
+    return skills
+
+
+def _extract_technologies(text: str) -> List[str]:
+    """
+    从项目描述中识别常见技术词。
+
+    这不是为了穷举所有技术，而是给项目卡片一个稳定、干净的 technologies 字段。
+    """
+    technologies: List[str] = []
+    lower_text = text.lower()
+    for keyword in TECH_KEYWORDS:
+        if keyword.lower() in lower_text and keyword not in technologies:
+            technologies.append(keyword)
+    return technologies
+
+
+def _extract_projects_from_text(sections: Dict[str, List[str]]) -> List[Dict[str, Any]]:
+    """
+    从“项目经历”段落抽取项目。
+
+    常见格式是: 项目名、时间、若干描述。遇到下一组“项目名+时间”时切换项目。
+    """
+    lines = sections.get("项目经历", [])
+    projects: List[Dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        name = _clean_text(lines[index], drop_if_corrupted=True)
+        if not name or _is_date_line(name):
+            index += 1
+            continue
+        if index + 1 >= len(lines) or not _is_date_line(lines[index + 1]):
+            index += 1
+            continue
+
+        start = index + 2
+        end = start
+        while end < len(lines):
+            next_line = lines[end]
+            next_has_date = end + 1 < len(lines) and _is_date_line(lines[end + 1])
+            if next_has_date and not _is_date_line(next_line):
+                break
+            end += 1
+
+        description_lines = [_clean_text(line, drop_if_corrupted=True) for line in lines[start:end]]
+        description_lines = [line for line in description_lines if line]
+        description = "\n".join(description_lines)
+        projects.append({
+            "name": name,
+            "description": description,
+            "technologies": _extract_technologies(" ".join([name, description])),
+            "role": None,
+        })
+        index = end
+    return projects
+
+
+def _extract_work_from_text(sections: Dict[str, List[str]]) -> List[Dict[str, Any]]:
+    """
+    从“实习经历/工作经历”段落抽取工作经历。
+
+    常见格式是: 公司、职位、时间、若干描述。
+    """
+    lines = sections.get("实习经历", []) + sections.get("工作经历", [])
+    work_items: List[Dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        if index + 2 >= len(lines):
+            break
+        company = _clean_text(lines[index], drop_if_corrupted=True)
+        title = _clean_text(lines[index + 1], drop_if_corrupted=True)
+        duration = _clean_text(lines[index + 2], drop_if_corrupted=True)
+        if not company or not title or not _is_date_line(duration):
+            index += 1
+            continue
+
+        start = index + 3
+        end = start
+        while end < len(lines):
+            next_group = end + 2 < len(lines) and _is_date_line(lines[end + 2])
+            if next_group:
+                break
+            end += 1
+        description = _clean_string_list(lines[start:end])
+        work_items.append({
+            "company": company,
+            "title": title,
+            "duration": duration,
+            "description": description,
+        })
+        index = end
+    return work_items
 
 
 def _clean_string_list(values: Any) -> List[str]:
@@ -214,16 +459,22 @@ def _sanitize_profile(profile: Dict[str, Any], resume_text: str) -> Dict[str, An
     这层相当于后端安全网: LLM 负责理解，后处理负责把明显不可信的字段挡住。
     """
     contact = _extract_contact_info(resume_text)
+    sections = _split_resume_sections(resume_text)
+    text_education = _extract_education_from_text(sections)
+    text_skills = _extract_skills_from_text(sections)
+    text_projects = _extract_projects_from_text(sections)
+    text_work_experience = _extract_work_from_text(sections)
+    llm_skills = _clean_string_list(profile.get("skills"))
 
     sanitized: Dict[str, Any] = {
         "candidate_id": profile.get("candidate_id", ""),
         "name": contact["name"] or _clean_name(profile.get("name")),
         "email": contact["email"] or _extract_email(_clean_text(profile.get("email"))),
         "phone": contact["phone"] or _clean_text(profile.get("phone"), drop_if_corrupted=True),
-        "education": [],
-        "skills": _clean_string_list(profile.get("skills")),
-        "projects": [],
-        "work_experience": [],
+        "education": text_education.copy(),
+        "skills": [],
+        "projects": text_projects.copy(),
+        "work_experience": text_work_experience.copy(),
         "certifications": _clean_string_list(profile.get("certifications")),
         "strengths": _clean_string_list(profile.get("strengths")),
         "risks": _clean_string_list(profile.get("risks")),
@@ -231,42 +482,55 @@ def _sanitize_profile(profile: Dict[str, Any], resume_text: str) -> Dict[str, An
         "estimated_years_of_experience": profile.get("estimated_years_of_experience"),
     }
 
-    for item in profile.get("education") or []:
-        if not isinstance(item, dict):
-            continue
-        cleaned = {
-            "degree": _clean_text(item.get("degree"), drop_if_corrupted=True),
-            "school": _clean_text(item.get("school"), drop_if_corrupted=True),
-            "major": _clean_text(item.get("major"), drop_if_corrupted=True),
-            "start_year": _clean_year(item.get("start_year")),
-            "end_year": _clean_year(item.get("end_year")),
-        }
-        if cleaned["degree"] or cleaned["school"] or cleaned["major"]:
-            sanitized["education"].append(cleaned)
+    # 技能优先使用原文技能段落，再用 LLM 的干净技能补漏。
+    seen_skills = set()
+    for skill in text_skills + llm_skills:
+        if skill and skill not in seen_skills:
+            sanitized["skills"].append(skill)
+            seen_skills.add(skill)
 
-    for item in profile.get("projects") or []:
-        if not isinstance(item, dict):
-            continue
-        cleaned = {
-            "name": _clean_text(item.get("name"), drop_if_corrupted=True),
-            "description": _clean_text(item.get("description"), drop_if_corrupted=True),
-            "technologies": _clean_string_list(item.get("technologies")),
-            "role": _clean_text(item.get("role"), drop_if_corrupted=True) or None,
-        }
-        if cleaned["name"] or cleaned["description"] or cleaned["technologies"]:
-            sanitized["projects"].append(cleaned)
+    # 如果原文没有教育段落，再使用 LLM 的干净教育结果。
+    if not sanitized["education"]:
+        for item in profile.get("education") or []:
+            if not isinstance(item, dict):
+                continue
+            cleaned = {
+                "degree": _clean_text(item.get("degree"), drop_if_corrupted=True),
+                "school": _clean_text(item.get("school"), drop_if_corrupted=True),
+                "major": _clean_text(item.get("major"), drop_if_corrupted=True),
+                "start_year": _clean_year(item.get("start_year")),
+                "end_year": _clean_year(item.get("end_year")),
+            }
+            if cleaned["degree"] or cleaned["school"] or cleaned["major"]:
+                sanitized["education"].append(cleaned)
 
-    for item in profile.get("work_experience") or []:
-        if not isinstance(item, dict):
-            continue
-        cleaned = {
-            "company": _clean_text(item.get("company"), drop_if_corrupted=True),
-            "title": _clean_text(item.get("title"), drop_if_corrupted=True),
-            "duration": _clean_text(item.get("duration"), drop_if_corrupted=True) or None,
-            "description": _clean_string_list(item.get("description")),
-        }
-        if cleaned["company"] or cleaned["title"] or cleaned["description"]:
-            sanitized["work_experience"].append(cleaned)
+    # 如果原文没有项目段落，再使用 LLM 的干净项目结果。
+    if not sanitized["projects"]:
+        for item in profile.get("projects") or []:
+            if not isinstance(item, dict):
+                continue
+            cleaned = {
+                "name": _clean_text(item.get("name"), drop_if_corrupted=True),
+                "description": _clean_text(item.get("description"), drop_if_corrupted=True),
+                "technologies": _clean_string_list(item.get("technologies")),
+                "role": _clean_text(item.get("role"), drop_if_corrupted=True) or None,
+            }
+            if cleaned["name"] or cleaned["description"] or cleaned["technologies"]:
+                sanitized["projects"].append(cleaned)
+
+    # 如果原文没有实习/工作段落，再使用 LLM 的干净工作经历结果。
+    if not sanitized["work_experience"]:
+        for item in profile.get("work_experience") or []:
+            if not isinstance(item, dict):
+                continue
+            cleaned = {
+                "company": _clean_text(item.get("company"), drop_if_corrupted=True),
+                "title": _clean_text(item.get("title"), drop_if_corrupted=True),
+                "duration": _clean_text(item.get("duration"), drop_if_corrupted=True) or None,
+                "description": _clean_string_list(item.get("description")),
+            }
+            if cleaned["company"] or cleaned["title"] or cleaned["description"]:
+                sanitized["work_experience"].append(cleaned)
 
     years = sanitized["estimated_years_of_experience"]
     if years in ("", "—", "-"):
