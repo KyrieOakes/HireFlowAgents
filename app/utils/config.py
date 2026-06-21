@@ -48,8 +48,8 @@ class LLMSettings(BaseSettings):
 
     # --- 云端 DeepSeek ---
     cloud_base_url: str = "https://api.deepseek.com/v1"
-    cloud_api_key: str = "sk-595f9fce6d5245cfa00168b760217d40"
-    cloud_model: str = "deepseek-v4-pro"
+    cloud_api_key: str = ""  # 从 .env 读取, 不要硬编码
+    cloud_model: str = "deepseek-v4-flash"
 
     # 输出温度
     temperature: float = 0.1
