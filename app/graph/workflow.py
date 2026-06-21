@@ -84,7 +84,18 @@ def build_workflow() -> StateGraph:
     workflow.add_edge("evidence_retrieval", "match_agent")
     workflow.add_edge("match_agent", "ranking_agent")
     workflow.add_edge("ranking_agent", "human_review")
-    workflow.add_edge("human_review", END)
+
+    # human_review 后的条件路由: 批准→结束, 驳回→重新匹配
+    workflow.add_conditional_edges(
+        "human_review",
+        _check_review_result,
+        {
+            "approved": END,           # 批准 → 进入面试流程(后续Phase)
+            "modified": END,           # 修改后通过 → 同上
+            "rejected": "match_agent", # 驳回 → 重新匹配
+            "error": "error_handler",  # 错误 → 错误处理
+        },
+    )
 
     # ---- 添加条件边 (根据状态决定路径) ----
 
@@ -135,12 +146,26 @@ def _check_resume_validation(state: HiringState) -> str:
 def _check_errors(state: HiringState) -> str:
     """
     检查错误是否可以重试。
-
-    参数:
-        state: 当前工作流全局状态
-    返回:
-        str: "end" 结束流程 或 "retry" 重试
     """
-    # TODO: 根据错误类型判断是否可重试
-    # 例如: PDF 损坏 -> 不可重试; 网络超时 -> 可重试
     return "end"
+
+
+def _check_review_result(state: HiringState) -> str:
+    """
+    检查人工审核结果, 决定下一步。
+
+    返回:
+        "approved": 审核通过 → 进入面试
+        "modified": 修改后通过
+        "rejected": 驳回 → 回到匹配
+        "error": 出错
+    """
+    status = state.get("human_review_status", "")
+    if status == "approved":
+        return "approved"
+    elif status == "modified":
+        return "modified"
+    elif status == "rejected":
+        return "rejected"
+    else:
+        return "error"

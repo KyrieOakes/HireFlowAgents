@@ -220,17 +220,72 @@ async def ranking_agent_node(state: HiringState) -> Dict[str, Any]:
 
 
 # ================================================================
-# 7. Human Review 节点 (人工审核)
+# 7. Human Review 节点 (真实 interrupt)
 # ================================================================
 
 async def human_review_node(state: HiringState) -> Dict[str, Any]:
     """
-    人工审核节点。
+    人工审核节点 — 使用 LangGraph interrupt() 暂停工作流。
 
-    在此暂停工作流，等待人工确认。
-    实际实现中，LangGraph 的 interrupt 会暂停执行。
+    流程暂停后, 前端/API 可以调用 resume 继续:
+    - approve:  确认 shortlist, 进入面试流程
+    - reject:   驳回, 要求重新匹配
+    - modify:   手动调整候选人顺序
+
+    interrupt 是 LangGraph 原生机制, 配合 PostgresSaver:
+    - 状态持久化到 PostgreSQL checkpoint
+    - 即使服务器重启, 审核状态也能恢复
+    - 支持跨天审核 (面试流程可能跨多天)
     """
-    return {"human_review_status": "pending"}
+    from langgraph.types import interrupt
+
+    # 构建审核信息
+    ranking = state.get("ranking_results", {})
+    ranked = ranking.get("ranked_candidates", [])
+    shortlist = ranking.get("shortlist", [])
+
+    review_payload = {
+        "status": "pending_review",
+        "message": "请审核候选人排序结果, 选择进入面试的候选人",
+        "total_candidates": len(ranked),
+        "shortlist": shortlist,
+        "candidates": [
+            {
+                "rank": i + 1,
+                "candidate_id": c.get("candidate_id", "?"),
+                "score": c.get("total_score", 0),
+                "recommendation": c.get("recommendation", ""),
+            }
+            for i, c in enumerate(ranked)
+        ],
+        "available_actions": ["approve_shortlist", "reject", "modify"],
+    }
+
+    # 暂停! 等待人工输入
+    # interrupt() 会序列化当前 state 到 PostgresSaver
+    # 直到外部调用 resume 才会继续
+    human_decision = interrupt(review_payload)
+
+    # 处理人工决策
+    action = human_decision.get("action", "reject")
+    selected_ids = human_decision.get("selected_candidate_ids", shortlist)
+
+    if action == "approve_shortlist":
+        return {
+            "human_review_status": "approved",
+            "selected_candidate_ids": selected_ids,
+        }
+    elif action == "modify":
+        return {
+            "human_review_status": "modified",
+            "selected_candidate_ids": human_decision.get("selected_candidate_ids", shortlist),
+        }
+    else:  # reject
+        return {
+            "human_review_status": "rejected",
+            "selected_candidate_ids": [],
+            "errors": state.get("errors", []) + ["人工审核驳回: 需要重新匹配"],
+        }
 
 
 # ================================================================
@@ -241,7 +296,7 @@ async def error_handler_node(state: HiringState) -> Dict[str, Any]:
     """
     错误处理节点。
 
-    收集并展示工作流中发生的所有错误。
+    收集并展示工作流中发生的所有错误, 不阻塞流程。
     """
     errors = state.get("errors", [])
-    return {"human_review_status": "error"}
+    return {"human_review_status": "error", "errors": errors}

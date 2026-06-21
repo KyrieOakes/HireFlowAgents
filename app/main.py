@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database.session import init_db
 
 # 导入 API 路由模块
-from app.api import jobs, resumes, matching
+from app.api import jobs, resumes, matching, workflow
 
 
 # ================================================================
@@ -79,6 +79,7 @@ app.add_middleware(
 app.include_router(jobs.router)
 app.include_router(resumes.router)
 app.include_router(matching.router)
+app.include_router(workflow.router)
 
 
 # ================================================================
