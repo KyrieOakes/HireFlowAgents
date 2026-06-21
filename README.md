@@ -4,15 +4,16 @@
 
 ## 项目简介
 
-HireFlow 模拟完整招聘筛选流程：JD 分析 → 简历解析 → 候选人匹配评分 → 排序 → 结果展示。
+HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → 粗筛 → LLM 精排 → 面试问题 → 面试评价 → 邮件草稿。
 
 **核心亮点:**
-- LangGraph 多 Agent 工作流编排
-- 两阶段排序: 关键词粗筛 + LLM 精排
-- 7 维度候选人评分体系
+- 7 个专业 Agent (JD/Resume/Match/Ranking/Interview/Evaluation/Email)
+- 两阶段排序: 关键词粗筛 + LLM 精排 (ThreadPool 并行)
+- RAG 证据检索 (简历向量化 + Qdrant 语义搜索)
+- Human-in-the-loop 审核 (interrupt/resume)
 - LLM 本地/云端双模式 (一键切换)
-- PDF/DOCX 文件上传 + 自动解析
-- 评估体系 + 历史对比
+- PDF/DOCX 文件上传 + 自动解析 + 自动命名
+- 44 个测试 (0 failures)
 - Next.js 前端 (HR/ATS 工作台风格)
 
 ## 快速开始
@@ -20,138 +21,122 @@ HireFlow 模拟完整招聘筛选流程：JD 分析 → 简历解析 → 候选�
 ### 1. 环境准备
 
 ```bash
-# 激活 conda 环境
 conda activate hireflowagents
-
-# 安装 Python 依赖 (首次运行)
 pip install -r requirements.txt
-
-# 复制环境变量配置
 cp .env.example .env
-# 编辑 .env 填入你的 API Key
-# LLM_CLOUD_API_KEY=你的DeepSeek-API-Key
+# 编辑 .env: LLM_MODE=local 或 cloud, 填入 API Key
 ```
 
-### 2. 启动数据库服务
+### 2. 启动数据库
 
 ```bash
-# 启动 PostgreSQL + Qdrant
-docker compose up -d postgres qdrant
-
-# 确认服务就绪
-docker ps --filter "name=hireflow"
-# 应该看到 hireflow-postgres 和 hireflow-qdrant 两个容器
-
-# 如需停止服务
-docker compose down
+docker compose up -d postgres qdrant        # 启动
+docker ps --filter "name=hireflow"          # 确认
+docker compose down                         # 停止
 ```
 
-### 3. 运行 Demo
+### 3. 启动后端 API
 
 ```bash
-# CLI Demo: 用内置示例数据运行完整 Pipeline
-python -m app.cli demo
-
-# 用自定义文件运行
-python -m app.cli run <岗位文件.txt> <简历文件夹/>
+uvicorn app.main:app --reload               # → http://localhost:8000
+open http://localhost:8000/docs             # API 文档
 ```
 
 ### 4. 启动前端
 
 ```bash
-# 安装前端依赖 (首次运行)
-cd frontend && npm install
-
-# 启动 Next.js 开发服务器
-npm run dev
-# → http://localhost:3000
+cd frontend && npm install                  # 首次
+npm run dev                                 # → http://localhost:3000
 ```
 
-### 5. 启动 API 服务
+### 5. CLI Demo
 
 ```bash
-# 启动 FastAPI 服务器 (开发模式)
-uvicorn app.main:app --reload
-
-# 访问 API 文档
-open http://localhost:8000/docs
+python -m app.cli demo                      # 内置示例数据
+python -m app.cli run <JD.txt> <简历目录>    # 自定义数据
 ```
 
-### 6. 运行评估报告
+### 6. 评估报告
 
 ```bash
-# 启动 Jupyter Notebook
 cd evaluation
-jupyter notebook 系统评估报告.ipynb
-
-# 或: 在 VS Code 中打开 .ipynb 文件直接运行
+jupyter notebook 系统评估报告.ipynb         # 8 个 Cell
+python run_eval.py                          # 自动化脚本
 ```
+
+### 7. 测试
+
+```bash
+pytest tests/                               # 44 tests
+pytest tests/ -v                            # 详细
+```
+
+## 系统 Agent
+
+| Agent | 职责 | 输出 |
+|---|---|---|
+| JD Agent | 解析岗位描述 | 结构化 JD + 评分 Rubric |
+| Resume Agent | 解析简历 | 候选人画像 (教育/技能/项目/经历) |
+| Match Agent | 匹配评分 | 7 维度分数 + 证据 |
+| Ranking Agent | 排序 | 排名表 + Shortlist + 解释 |
+| Interview Agent | 面试问题 | 4 类定制化问题 (技术/项目/行为/风险) |
+| Evaluation Agent | 面试评价 | 技术/沟通/问题解决 + 推荐建议 |
+| Email Agent | 邮件草稿 | 面试邀请/拒信/跟进/下一轮 |
 
 ## API 端点
 
+### 岗位与简历
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/jobs/upload` | 上传岗位描述文本 |
-| `POST` | `/jobs/{id}/parse` | 调用 JD Agent 解析 |
-| `GET` | `/jobs/{id}` | 获取岗位详情 |
+| `POST` | `/jobs/upload` | 上传岗位描述 |
+| `POST` | `/jobs/{id}/parse` | JD Agent 解析 |
+| `GET` | `/jobs/{id}` | 岗位详情 |
 | `DELETE` | `/jobs/{id}` | 删除岗位 |
 | `POST` | `/resumes/upload` | 上传简历文本 |
-| `POST` | `/resumes/upload-file` | 上传 PDF/DOCX/TXT 文件 |
-| `POST` | `/resumes/{id}/parse` | 调用 Resume Agent 解析 |
-| `GET` | `/resumes/{id}` | 获取候选人详情 |
+| `POST` | `/resumes/upload-file` | 上传 PDF/DOCX/TXT |
+| `POST` | `/resumes/{id}/parse` | Resume Agent 解析 (自动 RAG 索引) |
+| `GET` | `/resumes/{id}` | 候选人详情 |
 | `DELETE` | `/resumes/{id}` | 删除候选人 |
-| `POST` | `/jobs/{id}/match?limit=N` | 执行匹配评分 + 排序 (支持 TopN) |
-| `GET` | `/jobs/{id}/ranking` | 获取排序结果 |
 
-完整 API 文档: http://localhost:8000/docs (启动后访问)
+### 匹配与排名
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/jobs/{id}/match?limit=N` | 两阶段匹配 (粗筛+精排) |
+| `GET` | `/jobs/{id}/ranking?limit=N` | 排名结果 |
+| `GET` | `/jobs/{id}/candidates/{id}/detail` | 详细评分 |
+
+### 面试、评价、邮件
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/jobs/{id}/candidates/{id}/questions` | 生成面试问题 |
+| `GET` | `/jobs/{id}/candidates/{id}/questions` | 获取问题列表 |
+| `POST` | `/jobs/{id}/candidates/{id}/evaluate` | 提交面试评价 |
+| `GET` | `/jobs/{id}/candidates/{id}/evaluation` | 获取评价 |
+| `POST` | `/jobs/{id}/candidates/{id}/email-draft` | 生成邮件草稿 |
+| `GET` | `/jobs/{id}/candidates/{id}/email-draft` | 获取草稿列表 |
+| `POST` | `/email-drafts/{id}/approve` | 批准草稿 (不发送) |
+
+### 工作流
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/workflow/run` | 启动 LangGraph 工作流 (含 HITL) |
+| `POST` | `/workflow/{id}/resume` | 人工审核后继续 |
+| `GET` | `/workflow/{id}/state` | 查看工作流状态 |
 
 ## 技术栈
 
 | 层级 | 技术 |
 |---|---|
-| 后端框架 | Python 3.11, FastAPI, LangGraph, LangChain |
-| LLM (本地) | LM Studio + hermes-3-llama-3.1-8b |
-| LLM (云端) | DeepSeek API + deepseek-v4-pro |
+| 后端 | Python 3.11, FastAPI, LangGraph, LangChain |
+| LLM 本地 | LM Studio + hermes-3-llama-3.1-8b |
+| LLM 云端 | DeepSeek API + deepseek-v4-flash |
 | Embedding | text-embedding-qwen3-embedding-4b (2560维) |
-| 数据库 | PostgreSQL 16 (pgvector) |
-| 向量数据库 | Qdrant |
-| 配置管理 | Pydantic Settings |
-| 前端 | Next.js + Tailwind CSS (规划中) |
+| 数据库 | PostgreSQL 16 |
+| 向量库 | Qdrant |
+| 前端 | Next.js 14 + TypeScript + Tailwind CSS |
+| 测试 | pytest (44 tests), SQLite 内存库, FastAPI TestClient |
+| 配置 | Pydantic Settings + .env |
 | 部署 | Docker Compose |
-
-## LLM 模式切换
-
-在 `.env` 文件中设置 `LLM_MODE`:
-
-```bash
-# 本地 LM Studio (免费, 开发用)
-LLM_MODE=local
-
-# 云端 DeepSeek API (生产级, 需 API Key)
-LLM_MODE=cloud
-LLM_CLOUD_API_KEY=sk-xxxxxxxx
-```
-
-## 测试数据
-
-项目内置 3 份示例简历 + 1 个 AI 工程师 JD (在 `app/cli.py` 的 `run_demo()` 中)。
-
-### 测试数据说明
-
-| 候选人 | 背景 | 匹配度预期 |
-|---|---|---|
-| 李明 | AI 硕士, LangChain/RAG 项目经验 | 高分 (Strong Match) |
-| 王芳 | Java 后端, 无 AI 经验 | 中等 (Medium Match) |
-| 张伟 | 数据科学硕士, 有简历筛选项目 | 较高 (Strong Match) |
-
-### 添加更多测试数据
-
-1. 在 `data/resumes/` 下创建 `.txt` 或 `.md` 格式的简历文件
-2. 在 `data/jobs/` 下创建 JD 文件
-3. 运行: `python -m app.cli run data/jobs/你的JD.txt data/resumes/`
-
-未来会支持 PDF/DOCX 文件上传 (通过 API)。
-测试数据来源: 由 LLM 生成的 synthetic resumes (非真实简历).
 
 ## 项目结构
 
@@ -159,35 +144,39 @@ LLM_CLOUD_API_KEY=sk-xxxxxxxx
 HireFlowAgents/
 ├── app/
 │   ├── main.py              # FastAPI 入口
-│   ├── cli.py               # 命令行 Demo 工具
-│   ├── api/                  # 3 个路由模块 (jobs/resumes/matching)
-│   ├── agents/               # 4 个 Agent (jd/resume/match/ranking)
-│   ├── graph/                # LangGraph 工作流 (state/nodes/workflow)
-│   ├── schemas/              # Pydantic 数据模型
-│   ├── services/             # 5 个服务 (llm/embedding/vector/document/rag)
-│   ├── database/             # PostgreSQL ORM (models/session/crud)
+│   ├── cli.py               # CLI Demo
+│   ├── api/                  # 5 个路由 (jobs/resumes/matching/interview/evaluation/workflow)
+│   ├── agents/               # 7 个 Agent
+│   ├── graph/                # LangGraph (state/nodes/workflow + HITL)
+│   ├── schemas/              # Pydantic 模型
+│   ├── services/             # 6 个服务 (llm/embedding/vector/document/rag/pre_screening)
+│   ├── database/             # ORM + CRUD (7 表)
 │   └── utils/                # config + logger
-├── evaluation/               # 评估脚本 + Notebook
-├── data/                     # 测试数据 (JD + 简历)
-│   ├── jobs/                 # 岗位描述文件
-│   └── resumes/              # 简历文件
-├── logs/                     # 项目文档
-│   ├── HireFlow_项目计划书.md
-│   ├── 技术栈选择原因.md
-│   ├── MVPs/                 # MVP 阶段规划
-│   └── 开发日志/             # 开发日志
-├── docker-compose.yml        # PostgreSQL + Qdrant + API
-├── requirements.txt          # Python 依赖
-├── .env.example              # 环境变量模板
-└── README.md
+├── frontend/                 # Next.js (4 页面)
+├── evaluation/               # Notebook + 评估脚本 + reports
+├── tests/                    # 44 tests (Agent/CRUD/API/E2E)
+├── data/                     # 测试数据
+├── logs/                     # 项目文档 + 开发日志
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
 ```
 
-## 常用命令速查
+## 安全与合规
+
+- Agent 只生成建议/草稿，不做最终决定
+- `requires_human_review` / `requires_human_approval` = true
+- 邮件 `status="draft"`，审核只改状态，不发送
+- 不编造时间/地点/薪资/录用承诺
+- API Key 从 `.env` 读取，不硬编码
+
+## 常用命令
 
 ```bash
-conda activate hireflowagents          # 激活环境
-docker compose up -d postgres qdrant   # 启动数据库
-docker compose down                    # 停止数据库
-python -m app.cli demo                 # 运行 Demo
-uvicorn app.main:app --reload          # 启动 API
+conda activate hireflowagents
+docker compose up -d postgres qdrant
+uvicorn app.main:app --reload
+cd frontend && npm run dev
+python -m app.cli demo
+pytest tests/
 ```
