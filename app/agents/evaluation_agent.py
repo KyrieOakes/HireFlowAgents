@@ -98,17 +98,20 @@ risk_resolution 中的 reason 必须写中文。
     parsed = parse_json_response(response, default=_SENTINEL)
     result = {} if parsed is _SENTINEL else parsed
 
-    # 解析失败: 直接用原文做 summary, 至少用户能看到内容
+    # 解析失败: 清洗 JSON 语法字符, 提取可读文本
     if parsed is _SENTINEL:
         import re
         result["technical_depth_score"] = 5
         result["communication_score"] = 5
         result["problem_solving_score"] = 5
         result["risk_resolution"] = []
-        cn = re.findall(r'[一-鿿][一-鿿，。！？、；：""''（）\s]{8,}', response or "")
-        result["strengths"] = cn[:2] if cn else ["请查看下方原始评价内容"]
+        # 清洗: 去掉 JSON 括号/引号/逗号, 保留中文和字母
+        clean = re.sub(r'[{}\[\]",:_]', ' ', response or "")
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        cn = re.findall(r'[一-鿿][一-鿿，。！？、；：""''（）\s]{8,}', clean)
+        result["strengths"] = cn[:2] if cn else []
         result["concerns"] = []
-        result["summary"] = (response or "解析失败")[:500]
+        result["summary"] = clean[:400] if clean else "评价生成中, 请重试"
         result["recommendation"] = "Hold"
 
     # 强制字段 (安全锁)

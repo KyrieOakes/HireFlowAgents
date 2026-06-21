@@ -117,15 +117,22 @@ async def generate_email_draft(
 
     # 解析 JSON (使用健壮的解析器)
     from app.services.llm_service import parse_json_response
-    result = parse_json_response(response, default={
-        "subject": f"关于{job_title}岗位的通知",
-        "body": response,
-    })
+    _SENTINEL_EMAIL = object()
+    result = parse_json_response(response, default=_SENTINEL_EMAIL)
+    if result is _SENTINEL_EMAIL:
+        # 解析失败: 清洗 JSON 语法, 提取可读文本
+        import re
+        clean = re.sub(r'[{}\[\]",:_]', ' ', response or "")
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        result = {
+            "subject": f"关于{job_title}岗位的通知",
+            "body": clean if clean else response,
+        }
 
     return {
         "email_type": email_type,
         "subject": result.get("subject", f"关于{job_title}岗位的通知"),
-        "body": result.get("body", response),
+        "body": result.get("body", ""),
         "status": "draft",
         "requires_human_approval": True,
     }
