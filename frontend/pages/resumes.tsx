@@ -41,9 +41,14 @@ export default function ResumesPage() {
   useEffect(() => {
     if (!selected) return;
     const originalOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelected(null);
+    };
     document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
     return () => {
       document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
     };
   }, [selected]);
 

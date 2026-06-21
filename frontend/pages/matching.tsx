@@ -65,6 +65,21 @@ export default function MatchingPage() {
     })();
   }, []);
 
+  // 打开详细评分弹窗时锁住页面滚动，让弹窗始终处在当前视口中心。
+  useEffect(() => {
+    if (!detail) return;
+    const originalOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDetail(null);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [detail]);
+
   // 执行匹配 (防抖锁 + 耗时计时器)
   async function handleMatch() {
     if (!selectedJobId || matchLock.current) return;
@@ -332,8 +347,8 @@ export default function MatchingPage() {
 
       {/* ---- 候选人详细评分弹层 ---- */}
       {detail && (
-        <div className="fixed inset-0 z-20 flex items-start justify-center bg-slate-950/35 px-4 pt-20 backdrop-blur-sm" onClick={() => setDetail(null)}>
-          <div className="glass-panel soft-pop max-h-[80vh] w-full max-w-xl overflow-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-sm" onClick={() => setDetail(null)}>
+          <div className="glass-panel soft-pop max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-auto" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur">
               <h3 className="font-semibold text-slate-900">详细评分</h3>
               <button onClick={() => setDetail(null)} className="text-lg text-slate-400 transition hover:text-slate-700">×</button>
