@@ -344,3 +344,229 @@ def delete_candidate(db: Session, candidate_id: str) -> bool:
     db.delete(candidate)
     db.commit()
     return True
+
+
+# ============================================================
+# 面试问题 (InterviewQuestion) CRUD
+# ============================================================
+
+def save_interview_questions(
+    db: Session,
+    job_id: str,
+    candidate_id: str,
+    questions: list,
+) -> List[models.InterviewQuestion]:
+    """
+    保存候选人的面试问题列表。
+
+    先删除该候选人之前的问题, 再批量插入新的。
+    这样每次生成都是全新的问题集, 不会累积。
+
+    参数:
+        db: 数据库会话
+        job_id: 岗位ID
+        candidate_id: 候选人ID
+        questions: 问题列表, 每个元素含 question_type, question, purpose
+    返回:
+        List[InterviewQuestion]: 保存的问题对象
+    """
+    # 先删除旧问题 (如果重新生成)
+    db.query(models.InterviewQuestion).filter(
+        models.InterviewQuestion.job_id == job_id,
+        models.InterviewQuestion.candidate_id == candidate_id,
+    ).delete()
+
+    # 批量插入新问题
+    db_questions = []
+    for q in questions:
+        entry = models.InterviewQuestion(
+            job_id=job_id,
+            candidate_id=candidate_id,
+            question_type=q.get("question_type", ""),
+            question=q.get("question", ""),
+            purpose=q.get("purpose", ""),
+        )
+        db.add(entry)
+        db_questions.append(entry)
+
+    db.commit()
+    return db_questions
+
+
+def get_interview_questions(
+    db: Session,
+    job_id: str,
+    candidate_id: str,
+) -> List[models.InterviewQuestion]:
+    """获取某个候选人针对某个岗位的面试问题。"""
+    return (
+        db.query(models.InterviewQuestion)
+        .filter(
+            models.InterviewQuestion.job_id == job_id,
+            models.InterviewQuestion.candidate_id == candidate_id,
+        )
+        .order_by(models.InterviewQuestion.created_at)
+        .all()
+    )
+
+
+# ============================================================
+# 面试评价 (InterviewEvaluation) CRUD
+# ============================================================
+
+def save_interview_evaluation(
+    db: Session,
+    job_id: str,
+    candidate_id: str,
+    feedback_text: str,
+    evaluation: dict,
+) -> models.InterviewEvaluation:
+    """
+    保存候选人面试评价。
+
+    如果已有评价则更新, 否则新建。
+    评价包含面试官的原始反馈 + Evaluation Agent 的结构化评价。
+
+    参数:
+        db: 数据库会话
+        job_id: 岗位ID
+        candidate_id: 候选人ID
+        feedback_text: 面试官填写的原始反馈
+        evaluation: Evaluation Agent 生成的结构化评价
+    返回:
+        InterviewEvaluation: 保存的评价对象
+    """
+    # 查找是否已有评价
+    existing = (
+        db.query(models.InterviewEvaluation)
+        .filter(
+            models.InterviewEvaluation.job_id == job_id,
+            models.InterviewEvaluation.candidate_id == candidate_id,
+        )
+        .first()
+    )
+
+    if existing:
+        existing.feedback_text = feedback_text
+        existing.evaluation_json = evaluation
+        existing.final_recommendation = evaluation.get("recommendation", "")
+        db.commit()
+        db.refresh(existing)
+        return existing
+    else:
+        entry = models.InterviewEvaluation(
+            job_id=job_id,
+            candidate_id=candidate_id,
+            feedback_text=feedback_text,
+            evaluation_json=evaluation,
+            final_recommendation=evaluation.get("recommendation", ""),
+        )
+        db.add(entry)
+        db.commit()
+        db.refresh(entry)
+        return entry
+
+
+def get_interview_evaluation(
+    db: Session,
+    job_id: str,
+    candidate_id: str,
+) -> models.InterviewEvaluation | None:
+    """获取某个候选人的面试评价。"""
+    return (
+        db.query(models.InterviewEvaluation)
+        .filter(
+            models.InterviewEvaluation.job_id == job_id,
+            models.InterviewEvaluation.candidate_id == candidate_id,
+        )
+        .first()
+    )
+
+
+# ============================================================
+# 邮件草稿 (EmailDraft) CRUD
+# ============================================================
+
+def save_email_draft(
+    db: Session,
+    job_id: str,
+    candidate_id: str,
+    email_type: str,
+    subject: str,
+    body: str,
+) -> models.EmailDraft:
+    """
+    保存 HR 邮件草稿。
+
+    每次生成新草稿时会覆盖同一候选人的同类型旧草稿。
+    状态固定为 "draft", 需要人工审核后改为 "approved"。
+
+    参数:
+        db: 数据库会话
+        job_id: 岗位ID
+        candidate_id: 候选人ID
+        email_type: 邮件类型 (interview_invite/rejection/follow_up/next_round)
+        subject: 邮件标题
+        body: 邮件正文
+    返回:
+        EmailDraft: 保存的草稿对象
+    """
+    # 删除同一候选人的同类型旧草稿
+    db.query(models.EmailDraft).filter(
+        models.EmailDraft.job_id == job_id,
+        models.EmailDraft.candidate_id == candidate_id,
+        models.EmailDraft.email_type == email_type,
+    ).delete()
+
+    draft = models.EmailDraft(
+        job_id=job_id,
+        candidate_id=candidate_id,
+        email_type=email_type,
+        subject=subject,
+        body=body,
+        status="draft",
+    )
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+    return draft
+
+
+def get_email_drafts(
+    db: Session,
+    job_id: str,
+    candidate_id: str,
+) -> List[models.EmailDraft]:
+    """获取某个候选人的所有邮件草稿。"""
+    return (
+        db.query(models.EmailDraft)
+        .filter(
+            models.EmailDraft.job_id == job_id,
+            models.EmailDraft.candidate_id == candidate_id,
+        )
+        .order_by(models.EmailDraft.created_at.desc())
+        .all()
+    )
+
+
+def approve_email_draft(
+    db: Session,
+    email_id: str,
+) -> models.EmailDraft | None:
+    """
+    批准邮件草稿 (只改状态, 不发送)。
+
+    参数:
+        db: 数据库会话
+        email_id: 邮件草稿ID
+    返回:
+        EmailDraft 或 None
+    """
+    draft = db.query(models.EmailDraft).filter(
+        models.EmailDraft.email_id == email_id
+    ).first()
+    if draft:
+        draft.status = "approved"
+        db.commit()
+        db.refresh(draft)
+    return draft

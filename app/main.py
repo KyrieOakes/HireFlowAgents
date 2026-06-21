@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database.session import init_db
 
 # 导入 API 路由模块
-from app.api import jobs, resumes, matching, workflow
+from app.api import jobs, resumes, matching, workflow, interview, evaluation
 
 
 # ================================================================
