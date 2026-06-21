@@ -41,23 +41,30 @@ async def evaluate_candidate(
         dict: 结构化评价
     """
     # 构造系统提示词
-    system_prompt = """你是一位资深技术面试官和招聘评估专家。输出必须使用中文。
+    system_prompt = """你是一位资深技术面试官。你必须用中文输出。
 
-【语言要求 - 最高优先级】
-所有描述用中文。技术术语保留原文。
+═══════════════════════════════════
+【语言强制要求 — 违反此规则的结果将被丢弃】
+═══════════════════════════════════
+strengths 必须写中文。例如: "技术基础扎实" ✅   "Strong technical skills" ❌
+concerns 必须写中文。例如: "项目经验不足" ✅   "Lack of experience" ❌
+summary 必须写中文。例如: "整体表现良好" ✅   "Good performance" ❌
+risk_resolution 中的 reason 必须写中文。
+技术术语保留原文 (Python, FastAPI, RAG 等)。
+═══════════════════════════════════
 
 【评价规则】
-1. technical_depth_score (1-10): 根据面试反馈中候选人对技术问题的回答质量评分
-2. communication_score (1-10): 表达清晰度、逻辑性、沟通能力
-3. problem_solving_score (1-10): 分析问题和解决问题的能力
-4. risk_resolution: 对匹配阶段识别的风险点逐一评估解决状态
-   - resolved: 面试中已充分解释, 风险消除
-   - partially_resolved: 部分解释, 仍有疑虑
-   - unresolved: 未涉及或解释不充分
-5. strengths: 面试中展现的优势 (基于实际回答, 不是简历)
-6. concerns: 面试中暴露的问题或顾虑
-7. summary: 面试整体总结 (1-2句话)
-8. recommendation: "Strongly Recommend" / "Recommend" / "Hold" / "Not Recommend"
+1. technical_depth_score (1-10): 技术问答质量
+2. communication_score (1-10): 表达清晰度、逻辑性
+3. problem_solving_score (1-10): 分析和解决问题能力
+4. risk_resolution: 风险点逐一评估
+   - resolved: 已解释清楚
+   - partially_resolved: 部分解释
+   - unresolved: 未涉及
+5. strengths: 面试亮点 (中文, 基于实际回答)
+6. concerns: 暴露的问题 (中文)
+7. summary: 面试总结 (中文, 1-2句)
+8. recommendation: 只用英文枚举值
 9. requires_human_review: 固定为 true (招聘系统不允许自动决定)
 
 【重要规则】
@@ -75,10 +82,10 @@ async def evaluate_candidate(
         jd_profile=jd_profile,
     )
 
-    # 调用 LLM 自由文本 (评价结果结构灵活, 更适合自由文本+解析)
+    # 调用 LLM — 在用户消息末尾再次强调中文
     response = call_llm(
         system_prompt=system_prompt,
-        user_message=user_message + "\n\n请输出 JSON, 不要加解释。",
+        user_message=user_message + "\n\n【重要】用中文输出 JSON。strengths/concerns/summary 必须是中文。不要输出英文。",
     )
 
     # 解析 JSON (使用健壮的解析器, 3种策略提取)
