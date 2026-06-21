@@ -65,7 +65,10 @@ risk_resolution 中的 reason 必须写中文。
 6. concerns: 暴露的问题 (中文)
 7. summary: 面试总结 (中文, 1-2句)
 8. recommendation: 只用英文枚举值
-9. requires_human_review: 固定为 true (招聘系统不允许自动决定)
+9. requires_human_review: 固定为 true
+
+【JSON 格式示例 — 必须遵守, risk_resolution 是数组不是对象】
+{"technical_depth_score":8,"communication_score":7,"problem_solving_score":6,"risk_resolution":[{"risk":"项目经验不足","status":"resolved","reason":"展示了细节"}],"strengths":["技术扎实"],"concerns":["经验偏少"],"summary":"表现良好","recommendation":"Recommend","requires_human_review":true}
 
 【重要规则】
 - 必须基于 interview_feedback, 不能只根据简历下结论

@@ -182,5 +182,26 @@ def parse_json_response(raw: str, default: dict = None) -> dict:
         except json.JSONDecodeError:
             pass
 
+    # 策略 5: 修复常见 JSON 语法错误
+    # LLM 可能输出: {key: value} (缺引号), {key: value,} (尾部逗号)
+    # 或: "status": resolved (值没引号)
+    try:
+        fixed = text
+        # 提取 {...} 内容
+        s = fixed.find('{')
+        e = fixed.rfind('}')
+        if s != -1 and e != -1:
+            fixed = fixed[s:e + 1]
+        # 修复: 未加引号的常见值 (resolved, partially_resolved, unresolved 等)
+        for word in ['resolved', 'partially_resolved', 'unresolved',
+                     'Strongly Recommend', 'Recommend', 'Hold', 'Not Recommend']:
+            pattern = r'(: )(' + word + r')([,\s\n}])'
+            fixed = re.sub(pattern, r'\1"\2"\3', fixed)
+        # 修复: 未加引号的 key (如 why_use: value → "why_use": value)
+        fixed = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*(?:_[a-zA-Z0-9_]+)*)\s*:', r'\1"\2":', fixed)
+        return json.loads(fixed)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
     # 全部失败, 返回默认值
     return default
