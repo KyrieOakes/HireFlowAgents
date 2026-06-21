@@ -88,19 +88,25 @@ risk_resolution 中的 reason 必须写中文。
         user_message=user_message + "\n\n【重要】用中文输出 JSON。strengths/concerns/summary 必须是中文。不要输出英文。",
     )
 
-    # 解析 JSON (使用健壮的解析器, 3种策略提取)
+    # 解析 JSON (4种策略提取)
     from app.services.llm_service import parse_json_response
-    fallback = {
-        "technical_depth_score": 5,
-        "communication_score": 5,
-        "problem_solving_score": 5,
-        "risk_resolution": [],
-        "strengths": ["解析失败, 请重试"],
-        "concerns": ["LLM 返回格式异常"],
-        "summary": "评价解析失败, 请重试或补充更多面试反馈",
-        "recommendation": "Hold",
-    }
-    result = parse_json_response(response, default=fallback)
+    # 用 sentinel 对象检测解析是否成功
+    _SENTINEL = object()
+    parsed = parse_json_response(response, default=_SENTINEL)
+    result = {} if parsed is _SENTINEL else parsed
+
+    # 解析失败: 直接用原文做 summary, 至少用户能看到内容
+    if parsed is _SENTINEL:
+        import re
+        result["technical_depth_score"] = 5
+        result["communication_score"] = 5
+        result["problem_solving_score"] = 5
+        result["risk_resolution"] = []
+        cn = re.findall(r'[一-鿿][一-鿿，。！？、；：""''（）\s]{8,}', response or "")
+        result["strengths"] = cn[:2] if cn else ["请查看下方原始评价内容"]
+        result["concerns"] = []
+        result["summary"] = (response or "解析失败")[:500]
+        result["recommendation"] = "Hold"
 
     # 强制字段 (安全锁)
     result["requires_human_review"] = True
