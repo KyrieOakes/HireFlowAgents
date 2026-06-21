@@ -203,5 +203,28 @@ def parse_json_response(raw: str, default: dict = None) -> dict:
     except (json.JSONDecodeError, ValueError):
         pass
 
+    # 策略 6: 修复 Python 风格 / 宽松 JSON
+    # LLM 可能输出: 尾逗号, 单引号, Python None/True/False
+    try:
+        s = text.find('{')
+        e = text.rfind('}')
+        if s != -1 and e != -1:
+            fixed = text[s:e + 1]
+        else:
+            fixed = text
+        # 去尾逗号: ,} → }  ,] → ]
+        fixed = re.sub(r',\s*}', '}', fixed)
+        fixed = re.sub(r',\s*]', ']', fixed)
+        # 单引号 → 双引号 (但保留字符串内部的单引号)
+        fixed = re.sub(r"'([^']*)'(?=\s*[,:}\]])", r'"\1"', fixed)
+        # Python None → null
+        fixed = re.sub(r'\bNone\b', 'null', fixed)
+        # Python True/False → true/false
+        fixed = re.sub(r'\bTrue\b', 'true', fixed)
+        fixed = re.sub(r'\bFalse\b', 'false', fixed)
+        return json.loads(fixed)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
     # 全部失败, 返回默认值
     return default

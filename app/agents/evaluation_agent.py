@@ -98,21 +98,40 @@ risk_resolution 中的 reason 必须写中文。
     parsed = parse_json_response(response, default=_SENTINEL)
     result = {} if parsed is _SENTINEL else parsed
 
-    # 解析失败: 清洗 JSON 语法字符, 提取可读文本
+    # 解析失败: 用正则从原文提取字段值 (比清洗JSON更可读)
     if parsed is _SENTINEL:
         import re
         result["technical_depth_score"] = 5
         result["communication_score"] = 5
         result["problem_solving_score"] = 5
         result["risk_resolution"] = []
-        # 清洗: 去掉 JSON 括号/引号/逗号, 保留中文和字母
-        clean = re.sub(r'[{}\[\]",:_]', ' ', response or "")
-        clean = re.sub(r'\s+', ' ', clean).strip()
-        cn = re.findall(r'[一-鿿][一-鿿，。！？、；：""''（）\s]{8,}', clean)
-        result["strengths"] = cn[:2] if cn else []
-        result["concerns"] = []
-        result["summary"] = clean[:400] if clean else "评价生成中, 请重试"
         result["recommendation"] = "Hold"
+        # 尝试从原文提取字段
+        for field, pattern in [
+            ("summary", r'"summary"\s*:\s*"([^"]+)"'),
+            ("summary2", r'summary\s*:\s*([^\n]+)'),
+        ]:
+            m = re.search(pattern, response or "")
+            if m:
+                result["summary"] = m.group(1).strip()
+                break
+        # 提取 strengths 数组内容
+        m = re.search(r'"strengths"\s*:\s*\[(.*?)\]', response or "", re.DOTALL)
+        if m:
+            items = re.findall(r'"([^"]+)"', m.group(1))
+            result["strengths"] = items[:3] if items else []
+        else:
+            result["strengths"] = []
+        # 提取 concerns
+        m = re.search(r'"concerns"\s*:\s*\[(.*?)\]', response or "", re.DOTALL)
+        if m:
+            items = re.findall(r'"([^"]+)"', m.group(1))
+            result["concerns"] = items[:3] if items else []
+        else:
+            result["concerns"] = []
+        # summary 兜底
+        if not result.get("summary"):
+            result["summary"] = (response or "解析失败")[:300]
 
     # 强制字段 (安全锁)
     result["requires_human_review"] = True
