@@ -183,15 +183,14 @@ export default function JobsPage() {
                   )}
                 </div>
                 <div className="flex gap-2">
-                  {!(job.has_profile || job.jd_profile) && (
-                    <LoadingButton
-                      onClick={() => handleParse(job.job_id)}
-                      loading={!!parsing[job.job_id]}
-                      variant="secondary"
-                    >
-                      解析 JD
-                    </LoadingButton>
-                  )}
+                  {/* 已解析岗位也允许重新解析，方便修复旧模型留下的错误结果。 */}
+                  <LoadingButton
+                    onClick={() => handleParse(job.job_id)}
+                    loading={!!parsing[job.job_id]}
+                    variant="secondary"
+                  >
+                    {(job.has_profile || job.jd_profile) ? "重新解析" : "解析 JD"}
+                  </LoadingButton>
                   <LoadingButton
                     onClick={() => handleView(job.job_id)}
                     loading={false}
