@@ -2,6 +2,7 @@
 app/database/models.py
 =======================
 SQLAlchemy ORM 数据模型定义。
+把Python 的类 映射为“数据库的表” 的技术，就叫做 ORM-对象关系映射
 
 数据库中每个表对应一个 Python 类。每行记录对应一个类实例。
 SQLAlchemy 会自动把 Python 对象操作翻译为 SQL 语句，

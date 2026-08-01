@@ -26,6 +26,7 @@ class JobDescription(BaseModel):
 
     # 岗位名称，例如 "初级 AI 工程师", "Python 后端开发"
     # Field(..., description="...") 中的 ... 表示此字段是必填的
+    # Field - 规则制定
     job_title: str = Field(..., description="岗位名称")
 
     # 必备技能列表: 候选人必须掌握的技能

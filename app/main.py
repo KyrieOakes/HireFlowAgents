@@ -64,9 +64,15 @@ app = FastAPI(
 # CORS 中间件: 允许前端跨域访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 开发阶段允许所有来源
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["*"],  # 允许 所有网站（源）来访问我
+    allow_credentials=True, # 是否允许前端请求携带凭证（比如 Cookies、授权 Header、TLS 客户端证书等）
+    
+    # 允许前端使用哪些 HTTP 方法（请求方式）
+    # 前端用 GET（获取数据）、POST（提交数据）、PUT（修改数据）、DELETE（删除数据）等任何方式发请求，后端都放行
+    allow_methods=["*"], 
+
+    # 允许前端在请求头（Headers）里携带哪些自定义信息
+    # 前端可以在请求里自由地塞入各种自定义的 Header 参数（比如用来鉴权的 Token），后端都不会拦截
     allow_headers=["*"],
 )
 
@@ -88,6 +94,7 @@ app.include_router(evaluation.router)
 # 根路径: 健康检查
 # ================================================================
 
+# / 代表根路径（也叫主页、首页）。比如你的后端服务运行在 http://127.0.0.1:8000，那么当你直接在浏览器访问这个网址时，触发的就是 /
 @app.get("/")
 async def root():
     """

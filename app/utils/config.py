@@ -30,6 +30,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file_
 # - cloud: 连接 DeepSeek API (deepseek-v4-pro)
 # 两者都是 OpenAI 兼容接口
 
+# BaseSettings 是由 pydantic-settings 库提供的一个基类（模板类）
 class LLMSettings(BaseSettings):
     """
     LLM 配置。
@@ -39,6 +40,8 @@ class LLMSettings(BaseSettings):
     - "cloud": deepseek-v4-pro, 结构化输出用 function_calling (需关 thinking)
     """
 
+    # Literal-字面量
+    # 用来把变量的取值范围死死限制在指定的几个固定值里面，多一个少一个都不行
     mode: Literal["local", "cloud"] = "local"
 
     # --- 本地 LM Studio ---
@@ -57,7 +60,9 @@ class LLMSettings(BaseSettings):
     # 最大输出 token (本地模型无 thinking, 2048 够用)
     max_tokens: int = 2048
 
+    # 在 Pydantic 中，class Config 是一个 配置舱（或者叫内部配置类）
     class Config:
+        # env_prefix->告诉系统：在外面的 .env 文件或者系统环境变量里找配置时，请在变量名的前面自动加上 LLM_ 这个前缀再去找。
         env_prefix = "LLM_"
 
 
