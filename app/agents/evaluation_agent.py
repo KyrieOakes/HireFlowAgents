@@ -10,9 +10,11 @@ Evaluation Agent: 面试评价 Agent。
 输出: 结构化面试评价 (含 recommendation 建议)
 """
 
+import re
 from typing import Dict, Any
-from app.services.llm_service import call_llm_structured, call_llm
-from app.utils.config import settings
+
+from app.schemas.evaluation_schema import InterviewEvaluationOutput
+from app.services.llm_service import call_llm_structured
 
 
 async def evaluate_candidate(
@@ -85,43 +87,85 @@ risk_resolution 中的 reason 必须写中文。
         jd_profile=jd_profile,
     )
 
-    # 调用 LLM — 在用户消息末尾再次强调中文
-    response = call_llm(
-        system_prompt=system_prompt,
-        user_message=user_message + "\n\n【重要】用中文输出 JSON。strengths/concerns/summary 必须是中文。不要输出英文。",
-    )
+    try:
+        # 直接让 LangChain + Pydantic约束模型输出，不再手工猜测和修复 JSON。
+        structured = call_llm_structured(
+            system_prompt=system_prompt,
+            user_message=(
+                user_message
+                + "\n\n【重要】所有说明字段使用中文，并严格按结构化字段返回。"
+            ),
+            output_schema=InterviewEvaluationOutput,
+        )
+        result = structured.model_dump()
 
-    # 解析 JSON (6种策略)
-    from app.services.llm_service import parse_json_response
-    _SENTINEL = object()
-    parsed = parse_json_response(response, default=_SENTINEL)
-    result = {} if parsed is _SENTINEL else parsed
+        # 即使模型错误地把 JSON 片段放进 summary，也不能把它直接展示到页面。
+        summary = str(result.get("summary", "")).strip()
+        if _looks_like_serialized_data(summary):
+            result["summary"] = _build_safe_summary(interview_feedback)
+            result["concerns"] = list(result.get("concerns") or []) + [
+                "模型总结格式异常，已使用安全摘要，请人工核对详细评价。"
+            ]
+    except Exception as exc:
+        # 结构化调用失败时返回可读的保守评价，绝不能把模型原始 JSON 塞入 summary。
+        print(f"\n[EVAL STRUCTURED FAIL] {type(exc).__name__}: {str(exc)[:300]}\n")
+        result = _build_fallback_evaluation(interview_feedback, match_result)
 
-    # 解析失败: 原文直接作 summary
-    if parsed is _SENTINEL:
-        # 打印到终端方便调试
-        print(f"\n[EVAL PARSE FAIL] LLM raw (first 300 chars): {response[:300]}\n")
-        result["technical_depth_score"] = 5
-        result["communication_score"] = 5
-        result["problem_solving_score"] = 5
-        result["risk_resolution"] = []
-        result["strengths"] = []
-        result["concerns"] = []
-        result["summary"] = (response or "解析失败")[:500]
-        result["recommendation"] = "Hold"
-
-    # 强制字段 (安全锁)
+    # 招聘建议必须经过人工审核；这里覆盖模型值形成最后一道安全锁。
     result["requires_human_review"] = True
-    if "recommendation" not in result:
-        result["recommendation"] = "Hold"
-    if "risk_resolution" not in result:
-        result["risk_resolution"] = []
-    if "strengths" not in result:
-        result["strengths"] = []
-    if "concerns" not in result:
-        result["concerns"] = []
-
     return result
+
+
+def _looks_like_serialized_data(text: str) -> bool:
+    """判断 summary 是否误装入了 JSON、Python 字典或字段清单。"""
+    if not text:
+        return True
+    # 截图中的问题文本包含字段名和大量括号，这种内容不能作为自然语言总结展示。
+    field_hits = len(
+        re.findall(
+            r"technical_depth_score|communication_score|risk_resolution|recommendation",
+            text,
+        )
+    )
+    bracket_count = sum(text.count(char) for char in "{}[]")
+    return field_hits >= 1 or bracket_count >= 4
+
+
+def _build_safe_summary(interview_feedback: str) -> str:
+    """根据人工输入生成短而可读的兜底总结，不引用模型的损坏原文。"""
+    # 合并换行和重复空格，避免用户输入撑坏卡片布局。
+    clean_feedback = re.sub(r"\s+", " ", interview_feedback or "").strip()
+    if not clean_feedback:
+        return "面试反馈信息不足，当前评价暂设为待定，请人工补充并审核。"
+    preview = clean_feedback[:120]
+    return f"已记录面试官反馈：{preview}。当前评价暂设为待定，请人工审核。"
+
+
+def _build_fallback_evaluation(
+    interview_feedback: str,
+    match_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """在结构化输出失败时构造字段完整、内容可读的保守评价。"""
+    # 对每个历史风险标记“尚未确认”，避免失败时错误宣称风险已解决。
+    risk_resolution = [
+        {
+            "risk": str(risk),
+            "status": "unresolved",
+            "reason": "当前面试反馈不足以确认该风险是否已经解决。",
+        }
+        for risk in (match_result.get("risks") or [])
+    ]
+    return {
+        "technical_depth_score": 5,
+        "communication_score": 5,
+        "problem_solving_score": 5,
+        "risk_resolution": risk_resolution,
+        "strengths": [],
+        "concerns": ["结构化评价生成失败，当前结果仅作占位，请人工重新审核。"],
+        "summary": _build_safe_summary(interview_feedback),
+        "recommendation": "Hold",
+        "requires_human_review": True,
+    }
 
 
 def _build_eval_prompt(

@@ -17,9 +17,20 @@ def test_evaluate_candidate_mock():
     async def run():
         from app.agents.evaluation_agent import evaluate_candidate
 
-        with patch("app.agents.evaluation_agent.call_llm") as mock_llm:
-            # 模拟 LLM 返回
-            mock_llm.return_value = '{"technical_depth_score":8,"communication_score":7,"problem_solving_score":6,"risk_resolution":[{"risk":"经验不足","status":"resolved","reason":"实际有2年经验"}],"strengths":["表达清晰"],"concerns":[],"summary":"表现良好","recommendation":"Recommend"}'
+        from app.schemas.evaluation_schema import InterviewEvaluationOutput, RiskResolution
+
+        with patch("app.agents.evaluation_agent.call_llm_structured") as mock_llm:
+            # 模拟结构化 LLM 返回，测试 Pydantic 数据能完整流入 API。
+            mock_llm.return_value = InterviewEvaluationOutput(
+                technical_depth_score=8,
+                communication_score=7,
+                problem_solving_score=6,
+                risk_resolution=[RiskResolution(risk="经验不足", status="resolved", reason="实际有2年经验")],
+                strengths=["表达清晰"],
+                concerns=[],
+                summary="表现良好",
+                recommendation="Recommend",
+            )
 
             result = await evaluate_candidate(
                 interview_feedback="候选人回答流畅, 技术问题都答对了",
@@ -48,8 +59,8 @@ def test_evaluate_candidate_fallback():
     async def run():
         from app.agents.evaluation_agent import evaluate_candidate
 
-        with patch("app.agents.evaluation_agent.call_llm") as mock_llm:
-            mock_llm.return_value = "无效JSON"
+        with patch("app.agents.evaluation_agent.call_llm_structured") as mock_llm:
+            mock_llm.side_effect = ValueError("无效结构化输出")
 
             result = await evaluate_candidate(
                 interview_feedback="简单反馈",
@@ -60,6 +71,8 @@ def test_evaluate_candidate_fallback():
 
         assert result["requires_human_review"] is True
         assert result["recommendation"] == "Hold"  # 默认值
+        assert "technical_depth_score" not in result["summary"]
+        assert "简单反馈" in result["summary"]
 
     asyncio.run(run())
 

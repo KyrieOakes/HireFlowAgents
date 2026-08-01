@@ -111,6 +111,17 @@ export async function getCandidate(candidateId: string): Promise<Candidate> {
   return request(`/resumes/${candidateId}`);
 }
 
+/** 人工修改候选人姓名，并同步后端结构化画像 */
+export async function updateCandidateName(
+  candidateId: string,
+  name: string,
+): Promise<{ candidate_id: string; name: string; profile?: CandidateProfile | null; message: string }> {
+  return request(`/resumes/${candidateId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
 // ================================================================
 // 匹配 API
 // ================================================================

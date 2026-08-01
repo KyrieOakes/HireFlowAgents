@@ -86,6 +86,17 @@ def test_get_resumes(client):
     assert isinstance(resp.json(), list)
 
 
+def test_update_candidate_name(client):
+    """候选人姓名可以通过 PATCH 接口人工修正。"""
+    created = client.post("/resumes/upload", json={"resume_text": "个人概述\n测试简历"})
+    candidate_id = created.json()["candidate_id"]
+
+    response = client.patch(f"/resumes/{candidate_id}", json={"name": "王小明"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "王小明"
+
+
 def test_delete_candidate(client):
     r = client.post("/resumes/upload", json={"resume_text": "删除测试"})
     cid = r.json()["candidate_id"]
@@ -230,14 +241,18 @@ def test_full_pipeline_smoke(client):
         assert "technical" in types or "project_deep_dive" in types
 
     # Step 5: 面试评价
-    with patch("app.agents.evaluation_agent.call_llm") as mock_eval:
-        mock_eval.return_value = json.dumps({
-            "technical_depth_score":8,"communication_score":7,"problem_solving_score":7,
-            "risk_resolution":[{"risk":"RAG细节","status":"resolved","reason":"解释清晰"}],
-            "strengths":["技术扎实","表达清晰"],"concerns":["生产经验不足"],
-            "summary":"面试表现良好, 推荐进入下一轮",
-            "recommendation":"Recommend",
-        })
+    from app.schemas.evaluation_schema import InterviewEvaluationOutput, RiskResolution
+    with patch("app.agents.evaluation_agent.call_llm_structured") as mock_eval:
+        mock_eval.return_value = InterviewEvaluationOutput(
+            technical_depth_score=8,
+            communication_score=7,
+            problem_solving_score=7,
+            risk_resolution=[RiskResolution(risk="RAG细节", status="resolved", reason="解释清晰")],
+            strengths=["技术扎实", "表达清晰"],
+            concerns=["生产经验不足"],
+            summary="面试表现良好，推荐进入下一轮",
+            recommendation="Recommend",
+        )
         r5 = client.post(f"/jobs/{jid}/candidates/{cid}/evaluate", json={
             "interview_feedback": "候选人回答问题流畅, FastAPI经验丰富, RAG项目细节解释清晰",
         })
@@ -247,11 +262,12 @@ def test_full_pipeline_smoke(client):
         assert eval_data["recommendation"] == "Recommend"
 
     # Step 6: 邮件草稿
-    with patch("app.agents.email_agent.call_llm") as mock_email:
-        mock_email.return_value = json.dumps({
-            "subject":"面试邀请 - Python后端工程师",
-            "body":"尊敬的张三:\n\n恭喜您通过初步筛选, 诚邀您参加面试。\n\n面试时间: 待HR确认后另行通知",
-        })
+    from app.schemas.email_schema import EmailContentOutput
+    with patch("app.agents.email_agent.call_llm_structured") as mock_email:
+        mock_email.return_value = EmailContentOutput(
+            subject="面试邀请 - Python后端工程师",
+            body="尊敬的张三：\n\n恭喜您通过初步筛选，诚邀您参加面试。\n\n面试时间：待HR确认后另行通知",
+        )
         r6 = client.post(f"/jobs/{jid}/candidates/{cid}/email-draft", json={
             "email_type": "interview_invite",
         })

@@ -17,8 +17,10 @@ def test_generate_email_draft_structure():
     async def run():
         from app.agents.email_agent import generate_email_draft
 
-        with patch("app.agents.email_agent.call_llm") as mock_llm:
-            mock_llm.return_value = '{"subject":"面试邀请","body":"尊敬的张三..."}'
+        from app.schemas.email_schema import EmailContentOutput
+
+        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+            mock_llm.return_value = EmailContentOutput(subject="面试邀请", body="尊敬的张三，您好")
 
             result = await generate_email_draft(
                 candidate_profile={"name":"张三","skills":["Python"]},
@@ -43,8 +45,10 @@ def test_generate_email_rejection_is_polite():
     async def run():
         from app.agents.email_agent import generate_email_draft
 
-        with patch("app.agents.email_agent.call_llm") as mock_llm:
-            mock_llm.return_value = '{"subject":"感谢您的申请","body":"我们很遗憾..."}'
+        from app.schemas.email_schema import EmailContentOutput
+
+        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+            mock_llm.return_value = EmailContentOutput(subject="感谢您的申请", body="我们很遗憾...")
 
             result = await generate_email_draft(
                 candidate_profile={"name":"张三"},
@@ -67,8 +71,8 @@ def test_generate_email_fallback():
     async def run():
         from app.agents.email_agent import generate_email_draft
 
-        with patch("app.agents.email_agent.call_llm") as mock_llm:
-            mock_llm.return_value = "无效输出"
+        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+            mock_llm.side_effect = ValueError("无效输出")
             result = await generate_email_draft(
                 candidate_profile={"name":"张三"},
                 job_title="测试岗位",
@@ -79,6 +83,8 @@ def test_generate_email_fallback():
         assert result["requires_human_approval"] is True
         assert result["email_type"] == "interview_invite"
         assert len(result["body"]) > 0  # 有回退内容
+        assert "张三" in result["body"]
+        assert "候选人姓名" not in result["body"]
 
     asyncio.run(run())
 
@@ -115,8 +121,9 @@ def test_invalid_email_type_rejected():
 
     async def run():
         from app.agents.email_agent import generate_email_draft
-        with patch("app.agents.email_agent.call_llm") as mock_llm:
-            mock_llm.return_value = '{"subject":"通知","body":"内容"}'
+        from app.schemas.email_schema import EmailContentOutput
+        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+            mock_llm.return_value = EmailContentOutput(subject="通知", body="内容")
             result = await generate_email_draft(
                 candidate_profile={"name":"张三"},
                 job_title="测试",
@@ -124,5 +131,31 @@ def test_invalid_email_type_rejected():
             )
         # 不会崩溃, 返回草稿
         assert result["status"] == "draft"
+
+    asyncio.run(run())
+
+
+def test_email_replaces_candidate_name_placeholder():
+    """验证模型保留占位词时，后端会替换为真实姓名。"""
+    import asyncio
+    from unittest.mock import patch
+
+    async def run():
+        from app.agents.email_agent import generate_email_draft
+        from app.schemas.email_schema import EmailContentOutput
+
+        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+            mock_llm.return_value = EmailContentOutput(
+                subject="面试邀请",
+                body="尊敬的候选人姓名，您好：欢迎参加面试。",
+            )
+            result = await generate_email_draft(
+                candidate_profile={"name": "王小明"},
+                job_title="后端工程师",
+                email_type="interview_invite",
+            )
+
+        assert "王小明" in result["body"]
+        assert "候选人姓名" not in result["body"]
 
     asyncio.run(run())

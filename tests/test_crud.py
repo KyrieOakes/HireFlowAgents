@@ -102,6 +102,17 @@ def test_auto_named_protection(db: Session):
     assert fetched.name == "申请人A"  # 空名不覆盖
 
 
+def test_update_candidate_name_syncs_profile(db: Session):
+    """人工改名会同步候选人表和结构化画像，供匹配与邮件共用。"""
+    c = crud.create_candidate(db, "简历文本", "申请人A")
+    crud.update_candidate_profile(db, c.candidate_id, {"name": "", "skills": ["Python"]})
+
+    updated = crud.update_candidate_name(db, c.candidate_id, "王小明")
+
+    assert updated.name == "王小明"
+    assert updated.profile_json["name"] == "王小明"
+
+
 def test_delete_candidate(db: Session):
     c = crud.create_candidate(db, "简历文本")
     assert crud.delete_candidate(db, c.candidate_id) is True

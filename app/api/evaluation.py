@@ -68,10 +68,15 @@ async def create_email_draft(
     if eval_entry and eval_entry.evaluation_json:
         evaluation = eval_entry.evaluation_json
 
+    # 数据库顶层姓名可能经过人工修正，是发邮件时的权威来源。
+    candidate_profile = dict(candidate.profile_json)
+    if candidate.name and candidate.name.strip():
+        candidate_profile["name"] = candidate.name.strip()
+
     # 调用 Email Agent
     try:
         draft = await generate_email_draft(
-            candidate_profile=candidate.profile_json,
+            candidate_profile=candidate_profile,
             job_title=job.title or job.jd_profile_json.get("job_title", "未知岗位") if job.jd_profile_json else "未知岗位",
             email_type=request.email_type,
             evaluation_result=evaluation,

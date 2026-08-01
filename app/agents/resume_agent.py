@@ -19,7 +19,15 @@ from app.utils.config import settings
 
 
 SECTION_TITLES = {
+    "个人信息",
+    "基本信息",
+    "联系方式",
+    "个人概述",
+    "个人简介",
+    "个人总结",
+    "自我评价",
     "求职方向",
+    "求职意向",
     "教育经历",
     "项目经历",
     "实习经历",
@@ -151,8 +159,13 @@ def _clean_name(value: Any) -> str:
     name = re.sub(r"[^A-Za-z\u4e00-\u9fff·.\-\s]", "", name)
     name = re.sub(r"\s{2,}", " ", name).strip()
 
-    # 如果误把一整行联系方式或技能标题当成姓名，宁可置空。
-    if len(name) > 40 or _is_section_title(name) or re.search(r"邮箱|电话|手机|技能|项目|教育|工作|求职", name):
+    # 如果误把章节标题、职位或联系方式当成姓名，宁可置空并等待人工改名。
+    # “个人概述”正是 PDF 简历中最常见的误判之一，因此明确拦截这类语义词。
+    non_name_words = (
+        r"邮箱|电话|手机|技能|项目|教育|工作|求职|简历|概述|简介|总结|"
+        r"自我评价|基本信息|个人信息|联系方式|工程师|产品经理|实习生|岗位|职位"
+    )
+    if len(name) > 40 or _is_section_title(name) or re.search(non_name_words, name, flags=re.IGNORECASE):
         return ""
     return name
 
@@ -223,7 +236,12 @@ def _extract_contact_info(resume_text: str) -> Dict[str, str]:
             # 中文姓名通常 2-6 个汉字，英文姓名通常是 2-4 个单词。
             looks_like_chinese_name = bool(re.fullmatch(r"[\u4e00-\u9fff·]{2,6}", line))
             looks_like_english_name = bool(re.fullmatch(r"[A-Za-z]+(?:[ .-][A-Za-z]+){1,3}", line))
-            if (looks_like_chinese_name or looks_like_english_name) and "@" not in raw_line and not _extract_phone(raw_line):
+            if (
+                (looks_like_chinese_name or looks_like_english_name)
+                and line
+                and "@" not in raw_line
+                and not _extract_phone(raw_line)
+            ):
                 contact["name"] = line
                 break
 

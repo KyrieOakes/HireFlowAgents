@@ -15,7 +15,7 @@ import tempfile
 import os
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.database.session import get_db
 from app.database import crud
@@ -31,6 +31,13 @@ class ResumeUploadRequest(BaseModel):
     resume_text: str
     name: str | None = None
     filename: str | None = None
+
+
+class CandidateNameUpdateRequest(BaseModel):
+    """人工修改候选人姓名的请求体。"""
+
+    # 限制长度可以拦住空字符串和误粘贴的整段简历。
+    name: str = Field(..., min_length=1, max_length=80)
 
 
 # ---- 辅助: 自动生成申请人名称 ----
@@ -87,7 +94,9 @@ def _extract_file_text(filename: str, content: bytes) -> str:
         # fitz.open 可以接受 bytes 流 (通过 stream 参数)
         doc = fitz.open(stream=content, filetype="pdf")
         for page in doc:
-            text_parts.append(page.get_text())
+            # sort=True 会按页面坐标从上到下、从左到右整理文本。
+            # PDF 内部对象顺序经常和视觉顺序不同，不排序时姓名可能跑到“个人概述”之后。
+            text_parts.append(page.get_text("text", sort=True))
         doc.close()
         return "\n".join(text_parts)
 
@@ -119,10 +128,12 @@ async def upload_resume(
     请求体:
       {"resume_text": "简历全文...", "name": "可选", "filename": "简历.pdf"}
     """
+    # 文本粘贴和文件上传使用同一套自动命名，后续解析到可信姓名时才允许覆盖。
+    display_name = request.name.strip() if request.name and request.name.strip() else _generate_applicant_name(db)
     candidate = crud.create_candidate(
         db=db,
         resume_text=request.resume_text,
-        name=request.name,
+        name=display_name,
         filename=request.filename,
     )
     return {
@@ -248,6 +259,30 @@ async def parse_resume_endpoint(
     return {
         "candidate_id": candidate_id,
         "profile": profile,
+    }
+
+
+@router.patch("/{candidate_id}")
+async def update_candidate_name(
+    candidate_id: str,
+    request: CandidateNameUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    """人工修改候选人姓名，并同步更新结构化画像中的姓名。"""
+    # Pydantic 会检查长度；这里再去掉用户无意输入的首尾空格。
+    clean_name = request.name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="候选人姓名不能为空")
+
+    candidate = crud.update_candidate_name(db, candidate_id, clean_name)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="候选人不存在")
+
+    return {
+        "candidate_id": candidate.candidate_id,
+        "name": candidate.name,
+        "profile": candidate.profile_json,
+        "message": "候选人姓名已更新",
     }
 
 

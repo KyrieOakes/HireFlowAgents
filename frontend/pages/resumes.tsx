@@ -10,6 +10,7 @@ import {
   uploadResumeFile,
   parseResume,
   getCandidate,
+  updateCandidateName,
   deleteCandidate,
 } from "@/services/api";
 import LoadingButton from "@/components/LoadingButton";
@@ -28,6 +29,9 @@ export default function ResumesPage() {
   const [creating, setCreating] = useState(false);
   const [parsing, setParsing] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Candidate | null>(null);
+  const [editingNameId, setEditingNameId] = useState<string | null>(null);
+  const [editingNameValue, setEditingNameValue] = useState("");
+  const [renaming, setRenaming] = useState<Record<string, boolean>>({});
   const parsingLock = useRef<Set<string>>(new Set()); // 防抖锁
   // 文件上传状态
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -64,15 +68,13 @@ export default function ResumesPage() {
     }
   }
 
-  // 上传简历 (无名时自动生成"候选人N")
+  // 上传简历；未填写姓名时由后端统一生成“申请人A/B/C...”。
   async function handleCreate() {
     if (!resumeText.trim()) return;
     setCreating(true);
     setError(null);
     try {
-      // 未填姓名时自动生成: 候选人1, 候选人2, ...
-      const displayName = name.trim() || `候选人${candidates.length + 1}`;
-      await uploadResume(resumeText.trim(), displayName, filename.trim() || undefined);
+      await uploadResume(resumeText.trim(), name.trim() || undefined, filename.trim() || undefined);
       setName(""); setFilename(""); setResumeText("");
       await loadCandidates({ showPageLoading: false });
     } catch (e: any) { setError(e.message); }
@@ -166,6 +168,49 @@ export default function ResumesPage() {
     setError(null);
     try { setSelected(await getCandidate(candidateId)); }
     catch (e: any) { setError(e.message); }
+  }
+
+  // 进入内联改名状态，让用户可以修正任何自动解析不准确的姓名。
+  function beginRename(candidate: Candidate) {
+    setEditingNameId(candidate.candidate_id);
+    setEditingNameValue(candidate.name || "");
+  }
+
+  // 保存人工确认的姓名；后端会同时更新 Candidate 和 CandidateProfile。
+  async function handleRename(candidateId: string) {
+    const cleanName = editingNameValue.trim();
+    if (!cleanName) {
+      setError("候选人姓名不能为空");
+      return;
+    }
+
+    setRenaming((current) => ({ ...current, [candidateId]: true }));
+    setError(null);
+    try {
+      const updated = await updateCandidateName(candidateId, cleanName);
+      setCandidates((items) =>
+        items.map((candidate) =>
+          candidate.candidate_id === candidateId
+            ? {
+                ...candidate,
+                name: updated.name,
+                profile: updated.profile || candidate.profile,
+              }
+            : candidate,
+        ),
+      );
+      setSelected((candidate) =>
+        candidate?.candidate_id === candidateId
+          ? { ...candidate, name: updated.name, profile: updated.profile || candidate.profile }
+          : candidate,
+      );
+      setEditingNameId(null);
+      setEditingNameValue("");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setRenaming((current) => ({ ...current, [candidateId]: false }));
+    }
   }
 
   // 读取本地 .txt/.md 文件
@@ -308,10 +353,40 @@ export default function ResumesPage() {
           )}
           {candidates.map((c) => (
             <div key={c.candidate_id} className="focus-card flex items-center justify-between p-4">
-              <div>
-                <span className="font-semibold text-slate-900">
-                  {c.name || c.candidate_id || "未命名"}
-                </span>
+              <div className="min-w-0 flex-1">
+                {editingNameId === c.candidate_id ? (
+                  <div className="mb-2 flex max-w-md items-center gap-2">
+                    <input
+                      value={editingNameValue}
+                      onChange={(event) => setEditingNameValue(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") handleRename(c.candidate_id);
+                        if (event.key === "Escape") setEditingNameId(null);
+                      }}
+                      className="field"
+                      maxLength={80}
+                      autoFocus
+                      aria-label="候选人姓名"
+                    />
+                    <LoadingButton
+                      onClick={() => handleRename(c.candidate_id)}
+                      loading={!!renaming[c.candidate_id]}
+                      disabled={!editingNameValue.trim()}
+                    >
+                      保存
+                    </LoadingButton>
+                    <button
+                      onClick={() => setEditingNameId(null)}
+                      className="px-2 py-2 text-sm text-slate-500 hover:text-slate-800"
+                    >
+                      取消
+                    </button>
+                  </div>
+                ) : (
+                  <span className="font-semibold text-slate-900">
+                    {c.name || c.candidate_id || "未命名"}
+                  </span>
+                )}
                 <span className="ml-2 text-xs text-slate-400">{c.candidate_id}</span>
                 {c.resume_filename && <span className="ml-2 text-xs text-slate-400">{c.resume_filename}</span>}
                 {(c.has_profile || c.profile) && (
@@ -326,6 +401,9 @@ export default function ResumesPage() {
                 )}
               </div>
               <div className="flex gap-2 flex-shrink-0 ml-4">
+                <LoadingButton onClick={() => beginRename(c)} loading={false} variant="secondary">
+                  修改姓名
+                </LoadingButton>
                 {!(c.has_profile || c.profile) && (
                   <LoadingButton onClick={() => handleParse(c.candidate_id)} loading={!!parsing[c.candidate_id]} variant="secondary">
                     解析

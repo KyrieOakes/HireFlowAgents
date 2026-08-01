@@ -22,9 +22,11 @@ Email Agent: HR 邮件草稿生成 Agent。
 - 拒信要礼貌、克制
 """
 
+import re
 from typing import Dict, Any, List
-from app.services.llm_service import call_llm
-from app.utils.config import settings
+
+from app.schemas.email_schema import EmailContentOutput
+from app.services.llm_service import call_llm_structured
 
 
 async def generate_email_draft(
@@ -46,7 +48,8 @@ async def generate_email_draft(
     返回:
         dict: {"email_type": ..., "subject": ..., "body": ..., "status": "draft", "requires_human_approval": True}
     """
-    candidate_name = candidate_profile.get("name", "候选人")
+    # API 会优先传入数据库中人工确认的姓名；这里仍做一次空值保护。
+    candidate_name = str(candidate_profile.get("name") or "").strip() or "申请人"
 
     # 根据邮件类型准备提示词
     type_instructions = {
@@ -107,35 +110,99 @@ async def generate_email_draft(
             user_lines.append(f"候选人优势: {', '.join(strengths[:3])}")
 
     user_message = "\n".join(user_lines)
-    user_message += "\n\n【重要】用中文生成邮件。subject 和 body 必须是中文。只输出 JSON。"
+    user_message += "\n\n【重要】用中文生成邮件，并严格返回 subject 和 body 两个结构化字段。"
 
-    # 调用 LLM
-    response = call_llm(
-        system_prompt=system_prompt,
-        user_message=user_message,
-    )
+    try:
+        # 使用 Pydantic 结构化输出，防止自由文本 JSON 被压平成截图中的一长串内容。
+        structured = call_llm_structured(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            output_schema=EmailContentOutput,
+        )
+        result = structured.model_dump()
+    except Exception as exc:
+        print(f"\n[EMAIL STRUCTURED FAIL] {type(exc).__name__}: {str(exc)[:300]}\n")
+        result = _build_fallback_email(candidate_name, job_title, email_type)
 
-    # 解析 JSON (使用健壮的解析器)
-    from app.services.llm_service import parse_json_response
-    _SENTINEL_EMAIL = object()
-    result = parse_json_response(response, default=_SENTINEL_EMAIL)
-    if result is _SENTINEL_EMAIL:
-        # 解析失败: 清洗 JSON 语法, 提取可读文本
-        import re
-        clean = re.sub(r'[{}\[\]",:_]', ' ', response or "")
-        clean = re.sub(r'\s+', ' ', clean).strip()
-        result = {
-            "subject": f"关于{job_title}岗位的通知",
-            "body": clean if clean else response,
-        }
+    subject = str(result.get("subject") or "").strip()
+    body = str(result.get("body") or "").strip()
+
+    # 如果模型仍把序列化字段塞入正文，直接换成可读模板，不展示损坏原文。
+    if _looks_like_serialized_email(body):
+        result = _build_fallback_email(candidate_name, job_title, email_type)
+        subject = result["subject"]
+        body = result["body"]
+
+    # 最后统一替换模型可能保留的占位符，并保证正文明确包含真实姓名。
+    body = _apply_candidate_name(body, candidate_name)
+    if candidate_name not in body:
+        body = f"尊敬的{candidate_name}，您好：\n\n{body}"
 
     return {
         "email_type": email_type,
-        "subject": result.get("subject", f"关于{job_title}岗位的通知"),
-        "body": result.get("body", ""),
+        "subject": subject or f"关于{job_title}岗位的通知",
+        "body": body,
         "status": "draft",
         "requires_human_approval": True,
     }
+
+
+def _apply_candidate_name(body: str, candidate_name: str) -> str:
+    """把常见姓名占位符替换为本次候选人的权威姓名。"""
+    text = body or ""
+    # 先处理带括号和不带括号的“候选人姓名”。
+    text = re.sub(r"[\[【<（(]?候选人姓名[\]】>）)]?", candidate_name, text)
+    # 再处理称呼位置中的泛化“候选人”，避免误改正文里的普通名词。
+    text = re.sub(r"(尊敬的\s*)[\[【<（(]?候选人[\]】>）)]?", rf"\1{candidate_name}", text)
+    return text
+
+
+def _looks_like_serialized_email(body: str) -> bool:
+    """判断正文是否误装入 JSON 字段或被压平的键值串。"""
+    if not body:
+        return True
+    field_hits = len(re.findall(r"(?:^|\s)(?:title|subject|body)\s*[:|]", body, flags=re.IGNORECASE))
+    bracket_count = sum(body.count(char) for char in "{}[]")
+    return field_hits >= 1 or bracket_count >= 4
+
+
+def _build_fallback_email(candidate_name: str, job_title: str, email_type: str) -> Dict[str, str]:
+    """结构化生成失败时返回安全、完整且包含真实姓名的中文邮件模板。"""
+    templates = {
+        "interview_invite": (
+            f"关于{job_title}岗位的面试邀请",
+            f"尊敬的{candidate_name}，您好：\n\n"
+            f"感谢您申请{job_title}岗位。您已通过初步筛选，我们诚挚邀请您参加面试。"
+            "具体时间和地点待HR确认后另行通知。\n\n祝好\nHireFlow 招聘团队",
+        ),
+        "rejection": (
+            f"关于{job_title}岗位申请的通知",
+            f"尊敬的{candidate_name}，您好：\n\n"
+            f"感谢您对{job_title}岗位的关注和投入。经过审慎评估，我们本次决定继续推进其他更匹配的候选人。"
+            "感谢您的时间，并祝您未来求职顺利。\n\n祝好\nHireFlow 招聘团队",
+        ),
+        "follow_up": (
+            f"关于{job_title}岗位的面试跟进",
+            f"尊敬的{candidate_name}，您好：\n\n"
+            f"感谢您参加{job_title}岗位的面试。相关反馈正在整理，后续安排待HR确认后另行通知。"
+            "感谢您的耐心等待。\n\n祝好\nHireFlow 招聘团队",
+        ),
+        "next_round": (
+            f"关于{job_title}岗位的下一轮面试通知",
+            f"尊敬的{candidate_name}，您好：\n\n"
+            f"感谢您参加{job_title}岗位的本轮面试。我们诚挚邀请您进入下一轮面试。"
+            "具体时间和地点待HR确认后另行通知。\n\n祝好\nHireFlow 招聘团队",
+        ),
+    }
+    subject, body = templates.get(
+        email_type,
+        (
+            f"关于{job_title}岗位的通知",
+            f"尊敬的{candidate_name}，您好：\n\n有关{job_title}岗位的后续安排待HR确认后另行通知。"
+            "\n\n祝好\nHireFlow 招聘团队",
+        ),
+    )
+    return {"subject": subject, "body": body}
 
 
 async def batch_generate_emails(

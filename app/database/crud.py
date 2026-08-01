@@ -170,7 +170,16 @@ def update_candidate_profile(
         is_auto_named = candidate.name and candidate.name.startswith("申请人")
         new_name = profile.get("name", "")
         # LLM提取的名字是否看起来像真实人名 (不是空, 不是申请人模式)
-        is_real_name = bool(new_name) and not new_name.startswith("申请人")
+        # Resume Agent 已经清洗姓名；这里再拦住历史版本可能传来的常见章节标题。
+        invalid_parsed_names = {
+            "个人概述", "个人简介", "个人总结", "自我评价", "个人信息",
+            "基本信息", "联系方式", "求职方向", "求职意向", "候选人姓名",
+        }
+        is_real_name = (
+            bool(new_name)
+            and not new_name.startswith("申请人")
+            and new_name.strip() not in invalid_parsed_names
+        )
         if is_auto_named and is_real_name:
             candidate.name = new_name
         # 如果用户上传时手动填写了姓名，就尊重用户输入，不用解析结果覆盖。
@@ -178,6 +187,39 @@ def update_candidate_profile(
             candidate.email = profile["email"]
         db.commit()
         db.refresh(candidate)
+    return candidate
+
+
+def update_candidate_name(
+    db: Session,
+    candidate_id: str,
+    name: str,
+) -> Optional[models.Candidate]:
+    """
+    人工修改候选人姓名，并同步结构化画像。
+
+    参数:
+        db: 数据库会话
+        candidate_id: 候选人ID
+        name: 用户确认后的真实姓名
+    返回:
+        Candidate 或 None
+    """
+    candidate = get_candidate(db, candidate_id)
+    if not candidate:
+        return None
+
+    # 数据库顶层姓名是整个系统展示和发邮件时的权威来源。
+    candidate.name = name.strip()
+
+    if candidate.profile_json:
+        # JSON 字段必须创建新字典再赋值，SQLAlchemy 才能稳定检测到变化。
+        updated_profile = dict(candidate.profile_json)
+        updated_profile["name"] = candidate.name
+        candidate.profile_json = updated_profile
+
+    db.commit()
+    db.refresh(candidate)
     return candidate
 
 

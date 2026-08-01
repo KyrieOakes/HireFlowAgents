@@ -1,108 +1,86 @@
 """
 app/schemas/evaluation_schema.py
-=================================
-面试评价和邮件相关的 Pydantic 数据模型。
+================================
+面试、评价和邮件流程使用的结构化输出模型。
 
-定义了 Interview Agent、Evaluation Agent 和 Email Agent 输出的数据结构。
+这些模型会交给 LangChain 的 with_structured_output()，让模型直接返回
+经过 Pydantic 校验的数据，避免把不规范 JSON 原文展示给用户。
 """
 
+from typing import List, Literal
+
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
 
 
 class InterviewQuestion(BaseModel):
-    """
-    单条面试问题。
+    """Interview Agent 为候选人生成的一条面试问题。"""
 
-    Interview Agent 为候选人定制的面试题目。
-    """
-
-    # 问题类型: "technical"(技术), "project_deep_dive"(项目深挖),
-    #           "behavioral"(行为), "risk_verification"(风险验证)
+    # 问题类型，例如 technical 或 project_deep_dive。
     type: str = Field(..., description="问题类型")
-
-    # 问题正文
+    # question 是最终展示给面试官的题目正文。
     question: str = Field(..., description="面试问题")
-
-    # 提问目的: 面试官想通过这个问题了解什么
+    # purpose 解释为什么要问这道题。
     purpose: str = Field(..., description="提问目的")
 
 
 class CandidateQuestions(BaseModel):
-    """
-    单个候选人的完整面试问题集。
-    """
+    """单个候选人的完整面试问题集。"""
 
-    # 候选人 ID
     candidate_id: str = Field(..., description="候选人ID")
-
-    # 为该候选人生成的所有面试问题
-    questions: List[InterviewQuestion] = Field(
-        default_factory=list, description="面试问题列表"
-    )
+    questions: List[InterviewQuestion] = Field(default_factory=list, description="面试问题列表")
 
 
 class InterviewEvaluation(BaseModel):
-    """
-    面试评价 (面试后填写)。
+    """保留给旧工作流使用的面试评价结构。"""
 
-    Evaluation Agent 根据面试记录给出的最终评价。
-    """
-
-    # 候选人 ID
     candidate_id: str = Field(..., description="候选人ID")
-
-    # 面试总结: 对候选人面试表现的整体概述
     summary: str = Field(..., description="面试表现总结")
-
-    # 技术深度评分 (1-10)
-    technical_depth: int = Field(..., ge=1, le=10, description="技术深度 (1-10)")
-
-    # 沟通表达评分 (1-10)
-    communication: int = Field(..., ge=1, le=10, description="沟通表达 (1-10)")
-
-    # 问题解决能力评分 (1-10)
-    problem_solving: int = Field(..., ge=1, le=10, description="问题解决能力 (1-10)")
-
-    # 之前识别出的风险点是否在面试中被解决
-    risks_resolved: List[str] = Field(
-        default_factory=list, description="已解决的风险点"
-    )
-
-    # 仍然存在的顾虑
-    remaining_concerns: List[str] = Field(
-        default_factory=list, description="遗留顾虑"
-    )
-
-    # 最终推荐: "Strongly Recommend" / "Recommend" / "Not Recommend"
+    technical_depth: int = Field(..., ge=1, le=10, description="技术深度")
+    communication: int = Field(..., ge=1, le=10, description="沟通表达")
+    problem_solving: int = Field(..., ge=1, le=10, description="问题解决能力")
+    risks_resolved: List[str] = Field(default_factory=list, description="已解决的风险点")
+    remaining_concerns: List[str] = Field(default_factory=list, description="遗留顾虑")
     final_recommendation: str = Field(..., description="最终推荐")
 
 
 class EmailDraft(BaseModel):
-    """
-    HR 邮件草稿。
+    """保留给旧工作流使用、且必须经人工审批的邮件草稿结构。"""
 
-    Email Agent 生成的邮件草稿，发送前必须经过人工审核。
-    """
-
-    # 邮件 ID (系统生成)
     email_id: str = Field(..., description="邮件唯一ID")
-
-    # 候选人 ID
     candidate_id: str = Field(..., description="候选人ID")
-
-    # 岗位 ID
     job_id: str = Field(..., description="岗位ID")
-
-    # 邮件类型: "interview_invite"(面试邀请) / "rejection"(拒信)
-    #            "follow_up"(跟进) / "next_round"(下一轮通知)
     email_type: str = Field(..., description="邮件类型")
-
-    # 邮件标题
     subject: str = Field(..., description="邮件标题")
-
-    # 邮件正文
     body: str = Field(..., description="邮件正文")
-
-    # 邮件状态: "draft"(草稿) / "approved"(已批准) / "rejected"(已拒绝)
     status: str = Field(default="draft", description="邮件状态")
+
+
+class RiskResolution(BaseModel):
+    """记录一个匹配风险在面试中是否得到解释。"""
+
+    # risk 是匹配阶段已经识别出的风险名称。
+    risk: str = Field(..., description="需要核实的风险")
+    # status 只能使用这三个固定值，防止前端收到随意文本。
+    status: Literal["resolved", "partially_resolved", "unresolved"] = Field(
+        ..., description="风险解决状态"
+    )
+    # reason 必须根据面试官反馈解释判断依据。
+    reason: str = Field(..., description="风险状态的中文说明")
+
+
+class InterviewEvaluationOutput(BaseModel):
+    """Evaluation Agent 返回的完整结构化评价。"""
+
+    # 三项分数都限制在 1-10，超出范围时 Pydantic 会拒绝脏数据。
+    technical_depth_score: int = Field(..., ge=1, le=10, description="技术深度分数")
+    communication_score: int = Field(..., ge=1, le=10, description="沟通表达分数")
+    problem_solving_score: int = Field(..., ge=1, le=10, description="问题解决分数")
+    risk_resolution: list[RiskResolution] = Field(default_factory=list, description="风险核实结果")
+    strengths: list[str] = Field(default_factory=list, description="面试亮点")
+    concerns: list[str] = Field(default_factory=list, description="需要关注的问题")
+    summary: str = Field(..., description="一到两句中文面试总结")
+    recommendation: Literal[
+        "Strongly Recommend", "Recommend", "Hold", "Not Recommend"
+    ] = Field(..., description="供人工审核的建议")
+    # 招聘属于高风险决策，这个字段无论模型如何输出都必须保持为 True。
+    requires_human_review: bool = Field(default=True, description="是否需要人工审核")

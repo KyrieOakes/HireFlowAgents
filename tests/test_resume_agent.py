@@ -255,3 +255,34 @@ AI 产品与应用：RAG · AI Agent · LangGraph · Workflow Design · Human-in
         assert "FastAPI" in result["skills"]
         assert all("{" not in skill and "}" not in skill for skill in result["skills"])
     asyncio.run(run())
+
+
+def test_personal_summary_heading_is_not_candidate_name():
+    """验证 PDF 开头的“个人概述”标题不会再覆盖候选人姓名。"""
+    async def run():
+        from app.agents.resume_agent import parse_resume
+        from app.schemas.resume_schema import CandidateProfile
+
+        resume_text = """个人概述
+具备大模型应用开发经验，熟悉 LangGraph 和 RAG。
+技能
+Python、FastAPI
+"""
+        with patch("app.agents.resume_agent.call_llm_structured") as mock:
+            mock.return_value = CandidateProfile(
+                candidate_id="C001",
+                name="个人概述",
+                education=[],
+                skills=["Python"],
+                projects=[],
+                work_experience=[],
+                certifications=[],
+                strengths=[],
+                risks=[],
+                missing_info=[],
+            )
+            result = await parse_resume(resume_text, "C001")
+
+        assert result["name"] == ""
+
+    asyncio.run(run())
