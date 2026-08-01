@@ -124,24 +124,20 @@ async def generate_email_draft(
         print(f"\n[EMAIL STRUCTURED FAIL] {type(exc).__name__}: {str(exc)[:300]}\n")
         result = _build_fallback_email(candidate_name, job_title, email_type)
 
-    subject = str(result.get("subject") or "").strip()
-    body = str(result.get("body") or "").strip()
-
-    # 如果模型仍把序列化字段塞入正文，直接换成可读模板，不展示损坏原文。
-    if _looks_like_serialized_email(body):
-        result = _build_fallback_email(candidate_name, job_title, email_type)
-        subject = result["subject"]
-        body = result["body"]
-
-    # 最后统一替换模型可能保留的占位符，并保证正文明确包含真实姓名。
-    body = _apply_candidate_name(body, candidate_name)
-    if candidate_name not in body:
-        body = f"尊敬的{candidate_name}，您好：\n\n{body}"
+    # 无论模型是否成功返回结构化对象，都必须经过同一套内容质量检查。
+    # 这一步会拦截 title/body 压平、韩文乱码、占位签名和姓名占位符。
+    clean_content = sanitize_email_content(
+        subject=str(result.get("subject") or ""),
+        body=str(result.get("body") or ""),
+        candidate_name=candidate_name,
+        job_title=job_title,
+        email_type=email_type,
+    )
 
     return {
         "email_type": email_type,
-        "subject": subject or f"关于{job_title}岗位的通知",
-        "body": body,
+        "subject": clean_content["subject"],
+        "body": clean_content["body"],
         "status": "draft",
         "requires_human_approval": True,
     }
@@ -164,6 +160,80 @@ def _looks_like_serialized_email(body: str) -> bool:
     field_hits = len(re.findall(r"(?:^|\s)(?:title|subject|body)\s*[:|]", body, flags=re.IGNORECASE))
     bracket_count = sum(body.count(char) for char in "{}[]")
     return field_hits >= 1 or bracket_count >= 4
+
+
+def _contains_unsafe_email_artifacts(subject: str, body: str) -> bool:
+    """识别看似可读、实际仍含模型模板或乱码的邮件内容。"""
+    combined = f"{subject}\n{body}".strip()
+    if not combined:
+        return True
+
+    # 有些模型不会返回 JSON，而是输出“title ... body | ...”这种压平字段。
+    flattened_fields = bool(
+        re.search(r"(?:^|\s)(?:title|subject)\s+.+?\s+body\s*(?:[:|｜]|\s)", combined, flags=re.IGNORECASE)
+    )
+    # “你的名字”等是提示词模板残留，不能进入发给候选人的草稿。
+    template_markers = bool(
+        re.search(
+            r"你的名字|您的名字|招聘专家|\[公司名称\]|【公司名称】|<公司名称>|"
+            r"your name|company name",
+            combined,
+            flags=re.IGNORECASE,
+        )
+    )
+    # 当前系统要求中文邮件；韩文字符混入通常意味着本地模型输出污染。
+    has_hangul = bool(re.search(r"[\uac00-\ud7af]", combined))
+    return flattened_fields or template_markers or has_hangul
+
+
+def sanitize_email_content(
+    subject: str,
+    body: str,
+    candidate_name: str,
+    job_title: str,
+    email_type: str,
+) -> Dict[str, str]:
+    """
+    清洗模型生成或数据库中已有的邮件草稿。
+
+    输入:
+        subject: 模型或数据库中的邮件标题
+        body: 模型或数据库中的邮件正文
+        candidate_name: 数据库里人工确认的候选人姓名
+        job_title: 当前岗位名称
+        email_type: 邮件类型
+    输出:
+        dict: 可以安全展示的 subject 和 body
+    """
+    clean_subject = re.sub(r"\s+", " ", subject or "").strip()
+    clean_body = (body or "").strip()
+
+    # 本地模型有时会在结构化字符串里返回字面量“\\n”，而不是实际换行符。
+    # 先统一为真正的换行，前端 <pre> 才能按邮件段落正常显示。
+    clean_body = clean_body.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+
+    # 标题和正文要一起检查，因为损坏的 title/body 串可能被塞入任意一个字段。
+    if (
+        _looks_like_serialized_email(f"{clean_subject}\n{clean_body}")
+        or _contains_unsafe_email_artifacts(clean_subject, clean_body)
+    ):
+        return _build_fallback_email(candidate_name, job_title, email_type)
+
+    # 对内容正常但仍保留“候选人姓名”的邮件做确定性替换。
+    clean_body = _apply_candidate_name(clean_body, candidate_name)
+
+    # 替换后仍有占位符，说明格式超出可靠处理范围，使用安全模板更稳妥。
+    if re.search(r"候选人姓名|\[候选人\]|【候选人】|<候选人>", clean_body):
+        return _build_fallback_email(candidate_name, job_title, email_type)
+
+    # 模型可能省略称呼；系统补上真实姓名，避免生成无收件人的邮件。
+    if candidate_name not in clean_body:
+        clean_body = f"尊敬的{candidate_name}，您好：\n\n{clean_body}"
+
+    return {
+        "subject": clean_subject or f"关于{job_title}岗位的通知",
+        "body": clean_body,
+    }
 
 
 def _build_fallback_email(candidate_name: str, job_title: str, email_type: str) -> Dict[str, str]:

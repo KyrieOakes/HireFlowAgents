@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from app.database.session import get_db
 from app.database import crud
-from app.agents.email_agent import generate_email_draft
+from app.agents.email_agent import generate_email_draft, sanitize_email_content
 
 router = APIRouter(tags=["evaluation"])
 
@@ -111,21 +111,58 @@ async def get_email_drafts(
     candidate_id: str,
     db: Session = Depends(get_db),
 ):
-    """获取候选人的所有邮件草稿。"""
+    """获取候选人的所有邮件草稿，并修复历史版本留下的脏内容。"""
+    job = crud.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="岗位不存在")
+
+    candidate = crud.get_candidate(db, candidate_id)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="候选人不存在")
+
+    # 人工修改后的数据库姓名是邮件称呼的唯一权威来源。
+    candidate_name = (candidate.name or "").strip() or "申请人"
+    job_title = (
+        job.title
+        or ((job.jd_profile_json or {}).get("job_title"))
+        or "未知岗位"
+    )
     drafts = crud.get_email_drafts(db, job_id, candidate_id)
+
+    response_drafts = []
+    for draft in drafts:
+        clean_content = sanitize_email_content(
+            subject=draft.subject or "",
+            body=draft.body or "",
+            candidate_name=candidate_name,
+            job_title=job_title,
+            email_type=draft.email_type or "follow_up",
+        )
+
+        # 只修复尚未批准的历史草稿；已批准内容属于人工审核结果，不能静默改写。
+        if draft.status == "draft" and (
+            clean_content["subject"] != (draft.subject or "")
+            or clean_content["body"] != (draft.body or "")
+        ):
+            crud.update_email_draft_content(
+                db,
+                email_id=draft.email_id,
+                subject=clean_content["subject"],
+                body=clean_content["body"],
+            )
+
+        response_drafts.append({
+            "email_id": draft.email_id,
+            "email_type": draft.email_type,
+            "subject": clean_content["subject"] if draft.status == "draft" else draft.subject,
+            "body": clean_content["body"] if draft.status == "draft" else draft.body,
+            "status": draft.status,
+        })
+
     return {
         "job_id": job_id,
         "candidate_id": candidate_id,
-        "drafts": [
-            {
-                "email_id": d.email_id,
-                "email_type": d.email_type,
-                "subject": d.subject,
-                "body": d.body,
-                "status": d.status,
-            }
-            for d in drafts
-        ],
+        "drafts": response_drafts,
     }
 
 

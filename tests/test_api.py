@@ -139,6 +139,39 @@ def test_email_draft_route_exists(client):
     assert resp.status_code in (200, 404)
 
 
+def test_get_email_drafts_repairs_historical_dirty_draft(client):
+    """读取历史草稿时会清理 title/body 压平文本和姓名占位符。"""
+    from app.database import crud
+
+    # 直接写入一条旧版本产生的脏草稿，用来模拟用户截图中的数据库记录。
+    db = TestingSession()
+    try:
+        job = crud.create_job(db, "测试JD", "AI Agent 工程师")
+        candidate = crud.create_candidate(db, "测试简历", "王小明")
+        crud.save_email_draft(
+            db,
+            job.job_id,
+            candidate.candidate_id,
+            "interview_invite",
+            "邀请信",
+            "title 邀请信 body | 尊敬的 候选人姓名 您好! 지원 你的名字 招聘专家",
+        )
+        job_id = job.job_id
+        candidate_id = candidate.candidate_id
+    finally:
+        db.close()
+
+    response = client.get(f"/jobs/{job_id}/candidates/{candidate_id}/email-draft")
+
+    assert response.status_code == 200
+    body = response.json()["drafts"][0]["body"]
+    assert "王小明" in body
+    assert "候选人姓名" not in body
+    assert "title " not in body
+    assert "지원" not in body
+    assert body.endswith("HireFlow 招聘团队")
+
+
 def test_approve_nonexistent(client):
     """审批不存在邮件返回 404。"""
     resp = client.post("/email-drafts/nonexistent/approve")

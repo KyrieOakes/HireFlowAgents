@@ -194,3 +194,25 @@ def test_email_draft_flow(db: Session):
 
     approved = crud.approve_email_draft(db, draft.email_id)
     assert approved.status == "approved"
+
+
+def test_update_email_draft_content_only_updates_draft(db: Session):
+    """历史脏邮件只能在草稿状态被安全内容替换。"""
+    job = crud.create_job(db, "JD", "测试岗位")
+    candidate = crud.create_candidate(db, "简历", "王小明")
+    draft = crud.save_email_draft(
+        db,
+        job.job_id,
+        candidate.candidate_id,
+        "interview_invite",
+        "旧标题",
+        "title 旧内容 body | 候选人姓名",
+    )
+
+    updated = crud.update_email_draft_content(db, draft.email_id, "新标题", "尊敬的王小明")
+    assert updated.subject == "新标题"
+    assert updated.body == "尊敬的王小明"
+
+    crud.approve_email_draft(db, draft.email_id)
+    unchanged = crud.update_email_draft_content(db, draft.email_id, "不应更新", "不应更新")
+    assert unchanged is None

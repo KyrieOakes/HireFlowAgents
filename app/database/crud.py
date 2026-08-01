@@ -642,6 +642,32 @@ def get_email_drafts(
     )
 
 
+def update_email_draft_content(
+    db: Session,
+    email_id: str,
+    subject: str,
+    body: str,
+) -> models.EmailDraft | None:
+    """
+    更新尚在草稿阶段的邮件标题和正文。
+
+    这个函数用于清理历史版本保存的 title/body 压平文本；
+    已批准的邮件不会在这里被改写。
+    """
+    draft = db.query(models.EmailDraft).filter(
+        models.EmailDraft.email_id == email_id,
+        models.EmailDraft.status == "draft",
+    ).first()
+    if not draft:
+        return None
+
+    draft.subject = subject
+    draft.body = body
+    db.commit()
+    db.refresh(draft)
+    return draft
+
+
 def approve_email_draft(
     db: Session,
     email_id: str,

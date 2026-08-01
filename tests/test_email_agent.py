@@ -159,3 +159,62 @@ def test_email_replaces_candidate_name_placeholder():
         assert "候选人姓名" not in result["body"]
 
     asyncio.run(run())
+
+
+def test_email_discards_flattened_dirty_model_output():
+    """验证截图中的 title/body 压平、韩文和模板签名会触发安全兜底。"""
+    import asyncio
+    from unittest.mock import patch
+
+    async def run():
+        from app.agents.email_agent import generate_email_draft
+        from app.schemas.email_schema import EmailContentOutput
+
+        dirty_body = (
+            "title 邀请信 货运公司招聘大模型应用与 AI Agent 研发工程师面试 "
+            "body | 尊敬的 候选人姓名 您好!我们很高兴您通过了初步筛查。"
+            "再次感谢您的 지원! 祝好 你的名字 招聘专家"
+        )
+        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+            mock_llm.return_value = EmailContentOutput(subject="邀请信", body=dirty_body)
+            result = await generate_email_draft(
+                candidate_profile={"name": "王小明"},
+                job_title="大模型应用与 AI Agent 研发工程师",
+                email_type="interview_invite",
+            )
+
+        assert "王小明" in result["body"]
+        assert "候选人姓名" not in result["body"]
+        assert "title " not in result["body"]
+        assert "body |" not in result["body"]
+        assert "지원" not in result["body"]
+        assert "你的名字" not in result["body"]
+        assert result["body"].endswith("HireFlow 招聘团队")
+
+    asyncio.run(run())
+
+
+def test_email_converts_literal_newlines_for_display():
+    """验证模型返回的字面量换行符会转换成前端可显示的真实换行。"""
+    import asyncio
+    from unittest.mock import patch
+
+    async def run():
+        from app.agents.email_agent import generate_email_draft
+        from app.schemas.email_schema import EmailContentOutput
+
+        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+            mock_llm.return_value = EmailContentOutput(
+                subject="下一轮面试通知",
+                body="尊敬的番茄，您好：\\n欢迎进入下一轮面试。\\n祝好",
+            )
+            result = await generate_email_draft(
+                candidate_profile={"name": "番茄"},
+                job_title="AI Agent 工程师",
+                email_type="next_round",
+            )
+
+        assert "\\n" not in result["body"]
+        assert "您好：\n欢迎" in result["body"]
+
+    asyncio.run(run())
