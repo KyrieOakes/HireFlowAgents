@@ -63,6 +63,20 @@ def test_get_jobs(client):
     assert isinstance(resp.json(), list)
 
 
+def test_update_job_title(client):
+    """岗位创建后可以通过 PATCH 接口改名，并同步结构化 JD。"""
+    created = client.post(
+        "/jobs/upload",
+        json={"jd_text": "Agent 工程师 JD", "title": "旧岗位名"},
+    )
+    job_id = created.json()["job_id"]
+
+    response = client.patch(f"/jobs/{job_id}", json={"title": "Agent 平台工程师"})
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "Agent 平台工程师"
+
+
 def test_delete_job(client):
     # 先创建
     r = client.post("/jobs/upload", json={"jd_text": "要删除的JD"})

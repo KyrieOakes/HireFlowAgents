@@ -19,9 +19,9 @@ HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → 粗筛 → LL
 - Human-in-the-loop 审核 (interrupt/resume)
 - LLM 本地/云端双模式 (一键切换)
 - PDF/DOCX 文件上传 + 自动解析 + 自动命名
-- 前端产品化体验: 毛玻璃工作台、详情弹层、局部 loading、连续解析
+- 前端产品化体验: 毛玻璃工作台、岗位/候选人内联改名、详情弹层、局部 loading、连续解析
 - LLM 稳定性兜底: 简历语义错位修复、匹配输出截断兜底评分
-- 67 个测试 (0 failures)
+- 71 个测试 (0 failures)
 - Next.js 前端 (HR/ATS 工作台风格)
 
 ## 快速开始
@@ -75,7 +75,7 @@ python run_eval.py                          # 自动化脚本
 ### 7. 测试
 
 ```bash
-pytest tests/                               # 67 tests
+pytest tests/                               # 71 tests
 pytest tests/ -v                            # 详细
 ```
 
@@ -125,7 +125,8 @@ JD Agent --> Resume Agent --> Resume Validation
 | 情况 | 处理方式 |
 |---|---|
 | Timeout、ConnectionError、HTTP 429/5xx | 原参数指数退避，总尝试 3 次 |
-| query 为空、维度非法、重复 Tool Call | 作为 ToolMessage 返回，允许 Agent 改参数 |
+| candidate_id 省略、常见工具/字段别名、数字字符串 | 运行时注入或规范化后安全执行 |
+| top_k 越界、重复 Tool Call 等不可安全兼容参数 | 作为 ToolMessage 返回，允许 Agent 改参数 |
 | 工具正常但没有结果 | 标记 `insufficient_evidence`，不是系统错误 |
 | 跨候选人检索、受保护属性查询 | 立即阻断，不自动重试 |
 | 自动重试耗尽、模型连续非法调用 | 暂停并交给用户选择 |
@@ -141,6 +142,7 @@ JD Agent --> Resume Agent --> Resume Validation
 | `POST` | `/jobs/upload` | 上传岗位描述 |
 | `POST` | `/jobs/{id}/parse` | JD Agent 解析 |
 | `GET` | `/jobs/{id}` | 岗位详情 |
+| `PATCH` | `/jobs/{id}` | 人工修改岗位名称并同步结构化 JD |
 | `DELETE` | `/jobs/{id}` | 删除岗位 |
 | `POST` | `/resumes/upload` | 上传简历文本 |
 | `POST` | `/resumes/upload-file` | 上传 PDF/DOCX/TXT |
@@ -184,7 +186,7 @@ JD Agent --> Resume Agent --> Resume Validation
 | 数据库 | PostgreSQL 16 |
 | 向量库 | Qdrant |
 | 前端 | Next.js 14 + TypeScript + Tailwind CSS |
-| 测试 | pytest (67 tests), SQLite 内存库, FastAPI TestClient |
+| 测试 | pytest (71 tests), SQLite 内存库, FastAPI TestClient |
 | 配置 | Pydantic Settings + .env |
 | 部署 | Docker Compose |
 
@@ -204,7 +206,7 @@ HireFlowAgents/
 │   └── utils/                # config + logger
 ├── frontend/                 # Next.js (4 页面)
 ├── evaluation/               # Notebook + 评估脚本 + reports
-├── tests/                    # 67 tests (Agent/Tool重试/安全/CRUD/API/E2E)
+├── tests/                    # 71 tests (Agent/Tool重试/安全/CRUD/API/E2E)
 ├── data/                     # 测试数据
 ├── logs/                     # 项目文档 + 开发日志
 ├── Dockerfile
@@ -226,9 +228,10 @@ HireFlowAgents/
 
 - Resume Agent: 姓名、邮箱、电话、教育、项目、技能优先从原文规则解析，LLM 输出作为补充，避免章节标题或乱码进入画像。
 - Match Agent: prompt 自动截断，输出强制简洁；单个候选人 LLM 精排失败时返回规则兜底评分，不让 Top N 匹配整体失败。
-- Evidence Agent: 最大 3 轮、6 次 Tool Call；临时错误指数退避，非法参数允许模型修正两次，重试耗尽后进入人工选择。
+- Evidence Agent: 最大 3 轮、6 次 Tool Call；候选人 ID 由可信运行时注入，常见本地模型参数别名先规范化；临时错误指数退避，不可兼容参数允许模型修正两次，重试耗尽后进入人工选择。
 - Agent 审计: 保存 Tool Call、Observation 摘要、尝试次数、耗时、覆盖率和停止原因，不记录隐藏 CoT。
 - 前端交互: 简历解析使用单卡片 loading + 后台同步，连续解析多个候选人时页面不会白屏。
+- 人工命名: 岗位和候选人都支持卡片内联改名，并同步结构化画像；重新解析不会覆盖人工岗位名。
 - 详情弹层: 岗位、简历、匹配详情统一高层级弹窗和遮罩滚动，避免被导航遮挡。
 
 ## 常用命令

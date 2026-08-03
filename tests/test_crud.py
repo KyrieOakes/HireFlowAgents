@@ -60,6 +60,27 @@ def test_update_job_profile(db: Session):
     assert updated.jd_profile_json == profile
 
 
+def test_update_job_title_syncs_profile_and_survives_reparse(db: Session):
+    """人工岗位名会同步结构化 JD，并且重新解析时不会被模型标题覆盖。"""
+    job = crud.create_job(db, "JD文本")
+    crud.update_job_profile(
+        db,
+        job.job_id,
+        {"job_title": "模型解析标题", "required_skills": ["Python"]},
+    )
+
+    updated = crud.update_job_title(db, job.job_id, "Agent 平台工程师")
+    reparsed = crud.update_job_profile(
+        db,
+        job.job_id,
+        {"job_title": "第二次模型标题", "required_skills": ["LangGraph"]},
+    )
+
+    assert updated.title == "Agent 平台工程师"
+    assert updated.jd_profile_json["job_title"] == "Agent 平台工程师"
+    assert reparsed.title == "Agent 平台工程师"
+
+
 def test_delete_job(db: Session):
     job = crud.create_job(db, "JD文本")
     assert crud.delete_job(db, job.job_id) is True

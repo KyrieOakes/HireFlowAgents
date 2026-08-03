@@ -11,7 +11,7 @@ GET  /jobs/ → 获取所有岗位列表
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.database.session import get_db
 from app.database import crud
@@ -37,6 +37,13 @@ class JobResponse(BaseModel):
     jd_text: str
     jd_profile: dict | None
     rubric: dict | None
+
+
+class JobTitleUpdateRequest(BaseModel):
+    """人工修改岗位名称的请求体。"""
+
+    # 限制长度可以拦住空字符串和误粘贴的整段 JD。
+    title: str = Field(..., min_length=1, max_length=120)
 
 
 # ---- API 端点 ----
@@ -132,6 +139,30 @@ async def list_jobs(db: Session = Depends(get_db)):
         }
         for j in jobs
     ]
+
+
+@router.patch("/{job_id}")
+async def update_job_title(
+    job_id: str,
+    request: JobTitleUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    """人工修改岗位名称，并同步更新结构化 JD 中的 job_title。"""
+    # Pydantic 负责长度校验；这里再去掉用户无意输入的首尾空格。
+    clean_title = request.title.strip()
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="岗位名称不能为空")
+
+    job = crud.update_job_title(db, job_id, clean_title)
+    if not job:
+        raise HTTPException(status_code=404, detail="岗位不存在")
+
+    return {
+        "job_id": job.job_id,
+        "title": job.title,
+        "jd_profile": job.jd_profile_json,
+        "message": "岗位名称已更新",
+    }
 
 
 @router.delete("/{job_id}")

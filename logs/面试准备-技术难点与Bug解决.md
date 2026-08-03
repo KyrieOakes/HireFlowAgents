@@ -271,8 +271,8 @@ parsingLock.current.add(id);               // 同步加锁
 | 性能调优 | 1 | 控制 prompt/token 成本 |
 | 基础设施 | 2 | 读不到 .env、FK 约束 |
 | RAG | 2 | 索引缺失、ID 不一致 |
-| Agent 架构与容错 | 2 | Workflow/ReAct 组合、关键词安全误判 |
-| **总计** | **21** |  |
+| Agent 架构与容错 | 3 | Workflow/ReAct 组合、关键词安全误判、本地 Tool Call 参数兼容 |
+| **总计** | **22** |  |
 
 ---
 
@@ -301,7 +301,7 @@ reason --> search_resume_evidence Tool Call --> Qdrant Observation
 
 - 使用 `ChatOpenAI.bind_tools()` 把搜索工具和覆盖率工具的 JSON Schema 交给模型。
 - 使用 LangGraph `StateGraph` 构建 `reason → tools → reason` 反馈循环。
-- 搜索工具必须携带当前 `candidate_id`、评分维度、查询词和 `top_k`。
+- `candidate_id` 不信任模型输出，由运行时从当前 LangGraph 状态注入；模型只负责评分维度、查询词和 `top_k`。
 - 自定义受控 tools 节点，而不是直接放开通用工具执行器；节点统一完成候选人隔离、参数校验、错误分类、指数退避和审计。
 - Agent 最多 3 轮、6 次 Tool Call；同一组参数禁止重复调用。
 - 不保存隐藏 CoT，只保存工具名、参数、Observation、尝试次数、耗时和停止原因。
@@ -345,6 +345,32 @@ re.search(r"\bage\b", query.lower())
 **面试说法:** “这是典型的安全规则假阳性。简单黑名单会把 age 匹配到 Agent，
 不仅影响召回，还会让正常候选人被错误标记。我把中文包含匹配和英文词边界匹配
 分开，并用测试锁住这个边界。安全规则不能只追求拦截率，也要控制误伤率。”
+
+### 22. 本地模型省略 `candidate_id` 被误判为跨候选人访问
+
+**现象:** 真实 LM Studio 联调时，前端 Agent 轨迹同时出现两类红色错误：一部分
+Tool Call 没有填写 `candidate_id`，被报成 `TOOL_SECURITY_BLOCKED`；另一部分使用
+`search_evidence`、`query_text`、`technical` 等语义正确但不完全符合 schema 的名称，
+连续修正后触发 `TOOL_ARGUMENT_REPAIR_EXHAUSTED`。
+
+**根因:** 第一版把 `candidate_id` 当作模型必须生成的工具参数，并用“不等于当前
+候选人”统一判断越权。因此空字符串也被当成恶意跨候选人请求。OpenAI 兼容协议
+只保证 Tool Call 的基本结构，不同本地模型对工具名和参数枚举的服从度并不一致，
+所以过严的执行器会把可以无损修复的格式差异升级成业务中断。
+
+**解决:** 把身份参数和业务参数分开处理：
+
+- `candidate_id` 由受控 tools 节点从当前 `HiringState` 注入，模型省略它是正常情况。
+- 只有模型主动填写了另一个非空 ID 时，才判定为真正的跨候选人访问并立即阻断。
+- 对语义等价的工具名、维度名、`query_text/search_query` 和数字字符串做白名单规范化。
+- 缺少 query 时根据当前 JD 和维度生成确定性检索词；无法安全兼容的参数仍返回
+  `ToolMessage`，并附一份合法调用示例供模型修正。
+- 审计轨迹保存系统最终执行的规范参数，便于解释数据到底是如何被访问的。
+
+**面试说法:** “Tool Calling 不能只做 schema 校验，还要区分可信运行时上下文和
+模型生成参数。候选人 ID 属于授权边界，所以我不让模型决定，而是从图状态注入；
+空 ID 可以补全，非空且不同的 ID 才阻断。对本地模型常见的字段别名我做白名单
+规范化，但不会放宽安全边界。这既降低误报，也避免模型越权访问其他候选人。”
 
 ## ReAct Agent 高频追问速答
 

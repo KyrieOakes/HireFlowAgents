@@ -85,10 +85,45 @@ def update_job_profile(
         job.jd_profile_json = jd_profile
         if rubric:
             job.rubric_json = rubric
-        if jd_profile.get("job_title"):
+        # 只有岗位尚未命名时才采用模型解析出的标题。
+        # 这样用户创建时填写或后续人工修改的标题，不会在“重新解析 JD”后被模型覆盖。
+        if not job.title and jd_profile.get("job_title"):
             job.title = jd_profile["job_title"]
         db.commit()
         db.refresh(job)
+    return job
+
+
+def update_job_title(
+    db: Session,
+    job_id: str,
+    title: str,
+) -> Optional[models.Job]:
+    """
+    人工修改岗位名称，并同步结构化 JD 中的岗位标题。
+
+    参数:
+        db: 数据库会话
+        job_id: 岗位唯一 ID
+        title: 用户确认后的岗位名称
+    返回:
+        更新后的 Job；岗位不存在时返回 None
+    """
+    job = get_job(db, job_id)
+    if not job:
+        return None
+
+    # jobs.title 是列表、匹配页和详情页展示岗位名称的权威来源。
+    job.title = title.strip()
+
+    if job.jd_profile_json:
+        # JSON 字段必须创建新字典再赋值，SQLAlchemy 才能稳定识别字段发生变化。
+        updated_profile = dict(job.jd_profile_json)
+        updated_profile["job_title"] = job.title
+        job.jd_profile_json = updated_profile
+
+    db.commit()
+    db.refresh(job)
     return job
 
 

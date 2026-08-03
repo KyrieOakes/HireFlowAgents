@@ -179,15 +179,15 @@ def test_transient_tool_error_retries_then_succeeds():
 
 
 def test_invalid_tool_arguments_are_returned_for_agent_repair():
-    """验证查询参数错误不会原样重试，而是交给模型修改后重新调用。"""
+    """验证无法安全兼容的参数错误会交给模型修改后重新调用。"""
     model = FakeToolCallingModel(
         [
             _tool_call(
                 "invalid-call",
                 candidate_id="C001",
                 dimension="technical_skills",
-                query="",
-                top_k=3,
+                query="Python",
+                top_k=99,
             ),
             _tool_call(
                 "fixed-call",
@@ -221,6 +221,82 @@ def test_invalid_tool_arguments_are_returned_for_agent_repair():
     assert search_count == 1
     assert result.tool_calls[0].status == "correctable_error"
     assert result.tool_calls[1].status == "success"
+
+
+def test_missing_candidate_id_is_injected_by_runtime():
+    """模型省略候选人 ID 时由运行时注入，不应误报跨候选人访问。"""
+    model = FakeToolCallingModel(
+        [
+            _tool_call(
+                "missing-id-call",
+                dimension="technical_skills",
+                query="Python LangGraph",
+                top_k=3,
+            ),
+            AIMessage(content="已找到技术证据。"),
+        ]
+    )
+    observed_candidate_ids: list[str] = []
+
+    def fake_search(**kwargs: Any) -> list[dict]:
+        """记录工具最终收到的候选人 ID，验证它来自可信运行时上下文。"""
+        observed_candidate_ids.append(kwargs["candidate_id"])
+        return [{"text": "Python LangGraph 项目", "score": 0.93, "metadata": {}}]
+
+    result = asyncio.run(
+        run_evidence_agent(
+            jd_profile=_jd_profile(),
+            candidate_profile=_candidate_profile(),
+            model=model,
+            search_fn=fake_search,
+            sleep_fn=_no_sleep,
+        )
+    )
+
+    assert result.status == "completed", result.model_dump()
+    assert observed_candidate_ids == ["C001"]
+    assert result.tool_calls[0].arguments["candidate_id"] == "C001"
+
+
+def test_local_model_tool_aliases_are_normalized():
+    """本地模型常见的工具名、字段别名和数字字符串可以被安全规范化。"""
+    model = FakeToolCallingModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "search_evidence",
+                        "args": {
+                            "dimension": "technical",
+                            "query_text": "Python Agent",
+                            "top_k": "3",
+                        },
+                        "id": "alias-call",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="别名参数已正常执行。"),
+        ]
+    )
+
+    result = asyncio.run(
+        run_evidence_agent(
+            jd_profile=_jd_profile(),
+            candidate_profile=_candidate_profile(),
+            model=model,
+            search_fn=lambda **kwargs: [
+                {"text": "Python Agent 开发", "score": 0.9, "metadata": {}}
+            ],
+            sleep_fn=_no_sleep,
+        )
+    )
+
+    assert result.status == "completed", result.model_dump()
+    assert result.tool_calls[0].tool_name == "search_resume_evidence"
+    assert result.tool_calls[0].arguments["dimension"] == "technical_skills"
+    assert result.tool_calls[0].arguments["top_k"] == 3
 
 
 def test_cross_candidate_tool_call_is_blocked_immediately():

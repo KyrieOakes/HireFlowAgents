@@ -64,6 +64,17 @@ export async function getJob(jobId: string): Promise<Job> {
   return request(`/jobs/${jobId}`);
 }
 
+/** 人工修改岗位名称，并同步后端结构化 JD */
+export async function updateJobTitle(
+  jobId: string,
+  title: string,
+): Promise<{ job_id: string; title: string; jd_profile?: JDProfile | null; message: string }> {
+  return request(`/jobs/${jobId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
 // ================================================================
 // 简历 API
 // ================================================================

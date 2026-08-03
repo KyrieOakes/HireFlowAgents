@@ -9,6 +9,7 @@ import {
   uploadJob,
   parseJob,
   getJob,
+  updateJobTitle,
   deleteJob,
 } from "@/services/api";
 import LoadingButton from "@/components/LoadingButton";
@@ -27,6 +28,9 @@ export default function JobsPage() {
   const [creating, setCreating] = useState(false);
   const [parsing, setParsing] = useState<Record<string, boolean>>({});
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
+  const [editingTitleValue, setEditingTitleValue] = useState("");
+  const [renaming, setRenaming] = useState<Record<string, boolean>>({});
   // useRef 同步锁: 防止快速双击触发重复 API 调用
   const parsingLock = useRef<Set<string>>(new Set());
 
@@ -115,6 +119,49 @@ export default function JobsPage() {
     }
   }
 
+  // 进入卡片内联改名状态，交互方式与候选人改名保持一致。
+  function beginRename(job: Job) {
+    setEditingTitleId(job.job_id);
+    setEditingTitleValue(job.title || "");
+  }
+
+  // 保存岗位名称；后端会同时更新 Job.title 和 JDProfile.job_title。
+  async function handleRename(jobId: string) {
+    const cleanTitle = editingTitleValue.trim();
+    if (!cleanTitle) {
+      setError("岗位名称不能为空");
+      return;
+    }
+
+    setRenaming((current) => ({ ...current, [jobId]: true }));
+    setError(null);
+    try {
+      const updated = await updateJobTitle(jobId, cleanTitle);
+      setJobs((items) =>
+        items.map((job) =>
+          job.job_id === jobId
+            ? {
+                ...job,
+                title: updated.title,
+                jd_profile: updated.jd_profile || job.jd_profile,
+              }
+            : job,
+        ),
+      );
+      setSelectedJob((job) =>
+        job?.job_id === jobId
+          ? { ...job, title: updated.title, jd_profile: updated.jd_profile || job.jd_profile }
+          : job,
+      );
+      setEditingTitleId(null);
+      setEditingTitleValue("");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setRenaming((current) => ({ ...current, [jobId]: false }));
+    }
+  }
+
   // 加载中
   if (loading) {
     return <div className="text-center text-gray-400 py-12">加载中...</div>;
@@ -170,11 +217,41 @@ export default function JobsPage() {
               key={job.job_id}
               className="focus-card p-4"
             >
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <span className="font-semibold text-slate-900">
-                    {job.title || "未命名岗位"}
-                  </span>
+              <div className="mb-2 flex items-center justify-between">
+                <div className="min-w-0 flex-1">
+                  {editingTitleId === job.job_id ? (
+                    <div className="mb-2 flex max-w-md items-center gap-2">
+                      <input
+                        value={editingTitleValue}
+                        onChange={(event) => setEditingTitleValue(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") handleRename(job.job_id);
+                          if (event.key === "Escape") setEditingTitleId(null);
+                        }}
+                        className="field"
+                        maxLength={120}
+                        autoFocus
+                        aria-label="岗位名称"
+                      />
+                      <LoadingButton
+                        onClick={() => handleRename(job.job_id)}
+                        loading={!!renaming[job.job_id]}
+                        disabled={!editingTitleValue.trim()}
+                      >
+                        保存
+                      </LoadingButton>
+                      <button
+                        onClick={() => setEditingTitleId(null)}
+                        className="px-2 py-2 text-sm text-slate-500 hover:text-slate-800"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="font-semibold text-slate-900">
+                      {job.title || "未命名岗位"}
+                    </span>
+                  )}
                   <span className="ml-2 text-xs text-slate-400">{job.job_id}</span>
                   {(job.has_profile || job.jd_profile) && (
                     <span className="chip-green ml-2">
@@ -182,7 +259,14 @@ export default function JobsPage() {
                     </span>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="ml-4 flex flex-shrink-0 gap-2">
+                  <LoadingButton
+                    onClick={() => beginRename(job)}
+                    loading={false}
+                    variant="secondary"
+                  >
+                    修改名称
+                  </LoadingButton>
                   {/* 已解析岗位也允许重新解析，方便修复旧模型留下的错误结果。 */}
                   <LoadingButton
                     onClick={() => handleParse(job.job_id)}
