@@ -172,6 +172,8 @@ async def upload_resume_file(
         )
 
     # Step 2: 读取文件内容
+    rag_indexed = False
+    rag_index_warning = None
     try:
         content = await file.read()
     except Exception as e:
@@ -251,14 +253,26 @@ async def parse_resume_endpoint(
         from langchain_core.documents import Document
         doc = Document(page_content=candidate.resume_text, metadata={"source": "resume_parse"})
         chunks = chunk_documents([doc])
-        crud.save_resume_chunks(db, candidate_id, chunks, point_ids)
-    except Exception:
-        # 索引失败不阻塞解析流程
-        pass
+        crud.save_resume_chunks(
+            db,
+            candidate_id,
+            chunks,
+            point_ids,
+            replace_existing=True,
+        )
+        rag_indexed = bool(point_ids)
+    except Exception as error:
+        # 画像解析仍然保留，但必须把 RAG 失败明确返回，不能再静默伪装成解析全成功。
+        rag_index_warning = (
+            "候选人画像已解析，但简历证据索引失败；请确认 Qdrant 已启动且 "
+            f"Embedding 模型可用。原因：{str(error)[:200]}"
+        )
 
     return {
         "candidate_id": candidate_id,
         "profile": profile,
+        "rag_indexed": rag_indexed,
+        "rag_index_warning": rag_index_warning,
     }
 
 

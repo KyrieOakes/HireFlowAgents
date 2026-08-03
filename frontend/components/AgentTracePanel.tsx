@@ -8,6 +8,8 @@ import type {
   EvidenceAgentRun,
   EvidenceIntervention,
 } from "@/types";
+import { useState } from "react";
+import Modal from "@/components/Modal";
 
 
 interface Props {
@@ -60,6 +62,8 @@ export default function AgentTracePanel({
   loading,
   onResolve,
 }: Props) {
+  const [open, setOpen] = useState(false);
+
   if (runs.length === 0 && interventions.length === 0) return null;
 
   const completed = runs.filter((run) => run.status === "completed").length;
@@ -67,13 +71,42 @@ export default function AgentTracePanel({
   const needsReview = runs.filter((run) => run.status === "needs_human_review").length;
 
   return (
-    <section className="glass-pad" aria-labelledby="agent-trace-title">
+    <>
+      {/* 页面只保留紧凑入口，完整轨迹点击后在大弹窗中查看。 */}
+      <section className={`glass-pad ${needsReview > 0 ? "border-rose-200" : ""}`}>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="section-label">Bounded ReAct Agent</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">证据 Agent 执行轨迹</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {runs.length} 位候选人 · {completed} 完成 · {insufficient} 证据不足 · {needsReview} 待处理
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition ${
+              needsReview > 0
+                ? "bg-rose-700 text-white hover:bg-rose-800"
+                : "bg-slate-950 text-white hover:bg-slate-800"
+            }`}
+          >
+            {needsReview > 0 ? "查看并处理" : "查看执行轨迹"}
+          </button>
+        </div>
+      </section>
+
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="证据 Agent 执行轨迹"
+        maxWidthClass="max-w-5xl"
+      >
+        <section className="p-5" aria-labelledby="agent-trace-content-title">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="section-label">Bounded ReAct Agent</p>
-          <h2 id="agent-trace-title" className="mt-2 text-lg font-semibold text-slate-950">
-            证据 Agent 执行轨迹
-          </h2>
+          <h3 id="agent-trace-content-title" className="mt-2 text-lg font-semibold text-slate-950">运行详情</h3>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
             模型根据 Observation 动态选择简历检索工具；这里只展示可审计行动，不展示隐藏思维链。
           </p>
@@ -238,6 +271,8 @@ export default function AgentTracePanel({
           );
         })}
       </div>
-    </section>
+        </section>
+      </Modal>
+    </>
   );
 }

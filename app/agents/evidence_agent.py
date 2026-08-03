@@ -36,7 +36,7 @@ from app.schemas.evidence_agent_schema import (
     ToolCallTrace,
 )
 from app.services.llm_service import _get_llm
-from app.services.rag_service import search_evidence
+from app.services.rag_service import ResumeIndexMissingError, search_evidence
 from app.utils.config import settings
 
 
@@ -249,6 +249,8 @@ def _error_category(error: Exception) -> str:
     """
     if isinstance(error, EvidenceSecurityError):
         return "security"
+    if isinstance(error, ResumeIndexMissingError):
+        return "permanent"
     if isinstance(error, (ValueError, TypeError)):
         return "invalid_input"
     if isinstance(error, (TimeoutError, ConnectionError, httpx.TimeoutException, httpx.NetworkError)):

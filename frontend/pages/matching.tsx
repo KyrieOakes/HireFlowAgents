@@ -34,6 +34,7 @@ import EmptyState from "@/components/EmptyState";
 import StatusBadge from "@/components/StatusBadge";
 import ScoreBar from "@/components/ScoreBar";
 import AgentTracePanel from "@/components/AgentTracePanel";
+import Modal from "@/components/Modal";
 
 export default function MatchingPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -81,18 +82,6 @@ export default function MatchingPage() {
       }
     })();
   }, []);
-
-  // 打开详细评分弹窗时支持 Esc 关闭；滚动交给弹层遮罩自身处理，避免页面被锁死。
-  useEffect(() => {
-    if (!detail) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDetail(null);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [detail]);
 
   // 执行匹配 (防抖锁 + 耗时计时器)
   async function handleMatch(agentFailureAction: AgentFailureAction = "ask_user") {
@@ -396,14 +385,14 @@ export default function MatchingPage() {
         </>
       )}
 
-      {/* ---- 候选人详细评分弹层 ---- */}
-      {detail && (
-        <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/35 px-4 py-20 backdrop-blur-sm sm:py-24" onClick={() => setDetail(null)}>
-          <div className="glass-panel soft-pop mx-auto w-full max-w-xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="sticky top-0 flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur">
-              <h3 className="font-semibold text-slate-900">详细评分</h3>
-              <button onClick={() => setDetail(null)} className="text-lg text-slate-400 transition hover:text-slate-700">×</button>
-            </div>
+      {/* Portal 会让弹窗脱离 soft-enter 的 transform 定位上下文。 */}
+      <Modal
+        open={Boolean(detail)}
+        onClose={() => setDetail(null)}
+        title={`详细评分${detailId ? ` · ${nameMap[detailId] || detailId}` : ""}`}
+        maxWidthClass="max-w-xl"
+      >
+        {detail && (
             <div className="p-4 space-y-4">
               {/* 总分 + 等级 */}
               <div className="flex items-center gap-3">
@@ -462,9 +451,8 @@ export default function MatchingPage() {
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </div>
   );
 }

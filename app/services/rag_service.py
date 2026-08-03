@@ -20,7 +20,7 @@ RAG (Retrieval-Augmented Generation) 证据检索服务。
 from typing import List, Dict, Any
 from app.services.document_loader import load_document, chunk_documents
 from app.services.embedding_service import generate_embeddings, generate_single_embedding
-from app.services.vector_store import init_collection, store_chunks, search_similar
+from app.services.vector_store import count_points, init_collection, store_chunks, search_similar
 
 
 # 简历 chunks 在 Qdrant 中的集合名
@@ -29,6 +29,10 @@ RESUME_COLLECTION = "resume_chunks"
 
 # JD chunks 的集合名 (可选，后续 Phase 可能用到)
 JD_COLLECTION = "jd_chunks"
+
+
+class ResumeIndexMissingError(RuntimeError):
+    """候选人已解析但 Qdrant 中没有对应简历向量时抛出。"""
 
 
 def index_resume(
@@ -127,7 +131,45 @@ def search_evidence(
         filter_by={"candidate_id": candidate_id},
     )
 
+    # Qdrant 不设置相似度阈值，只要该候选人存在任意 chunk 就一定会返回结果。
+    # 因此空列表代表索引缺失，而不是“候选人没有相关能力证据”。
+    if not results and not resume_index_exists(candidate_id):
+        raise ResumeIndexMissingError(
+            f"候选人 {candidate_id} 的简历向量索引不存在，请重新建立 RAG 索引"
+        )
+
     return results
+
+
+def resume_index_exists(candidate_id: str) -> bool:
+    """检查 Qdrant 是否至少保存了一个属于当前候选人的简历文本块。"""
+    return count_points(
+        collection_name=RESUME_COLLECTION,
+        filter_by={"candidate_id": candidate_id},
+    ) > 0
+
+
+def ensure_resume_indexed(
+    resume_text: str,
+    candidate_id: str,
+    source: str = "matching_auto_rebuild",
+) -> List[str] | None:
+    """
+    匹配前检查简历索引，缺失时使用数据库中的原文自动重建。
+
+    返回 None 表示索引原本就存在；返回 point ID 列表表示本次完成了重建。
+    """
+    if resume_index_exists(candidate_id):
+        return None
+
+    point_ids = index_resume_text(
+        resume_text=resume_text,
+        candidate_id=candidate_id,
+        source=source,
+    )
+    if not point_ids:
+        raise ResumeIndexMissingError(f"候选人 {candidate_id} 的简历为空，无法建立向量索引")
+    return point_ids
 
 
 def search_evidence_for_match(

@@ -8,6 +8,7 @@ GET  /jobs/{job_id}/ranking   → 获取排序结果
 GET  /jobs/{job_id}/candidates/{id}/detail → 获取单个候选人的详细评分
 """
 
+import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,8 +20,69 @@ from app.database import crud
 from app.agents.match_agent import batch_match_candidates
 from app.agents.ranking_agent import rank_candidates
 from app.services.pre_screening import pre_screen_candidates
+from app.services.rag_service import ensure_resume_indexed
 
 router = APIRouter(prefix="/jobs", tags=["matching"])
+
+
+async def _ensure_candidate_indexes(
+    candidate_profiles: list[dict],
+    candidate_records: dict[str, object],
+    db: Session,
+) -> int:
+    """匹配前检查候选人 Qdrant 索引，并自动重建缺失项。"""
+    from app.services.document_loader import chunk_documents
+    from langchain_core.documents import Document
+
+    rebuilt_count = 0
+    failed_names: list[str] = []
+
+    for profile in candidate_profiles:
+        candidate_id = str(profile.get("candidate_id", ""))
+        candidate = candidate_records.get(candidate_id)
+        if not candidate:
+            failed_names.append(candidate_id or "未知候选人")
+            continue
+
+        try:
+            point_ids = await asyncio.to_thread(
+                ensure_resume_indexed,
+                candidate.resume_text,
+                candidate_id,
+            )
+            if point_ids is None:
+                continue
+
+            # 自动重建成功后同步替换 PostgreSQL 中的派生 chunk 映射。
+            document = Document(
+                page_content=candidate.resume_text,
+                metadata={"source": "matching_auto_rebuild"},
+            )
+            chunks = chunk_documents([document])
+            crud.save_resume_chunks(
+                db,
+                candidate_id,
+                chunks,
+                point_ids,
+                replace_existing=True,
+            )
+            rebuilt_count += 1
+        except Exception:
+            # 不把底层地址或认证信息拼到批量响应中，只返回可操作的服务检查建议。
+            failed_names.append(str(profile.get("name") or candidate_id))
+
+    if failed_names:
+        names = "、".join(failed_names[:5])
+        suffix = "等" if len(failed_names) > 5 else ""
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"以下候选人的简历证据索引不可用：{names}{suffix}。"
+                "请确认 Qdrant 已启动，并在 LM Studio 中加载 Embedding 模型后重试匹配。"
+            ),
+        )
+
+    return rebuilt_count
 
 
 @router.post("/{job_id}/match")
@@ -102,6 +164,11 @@ async def run_matching(
         candidate_profiles = candidate_profiles[:limit]
 
     matched_count = len(candidate_profiles)
+
+    # 旧代码会静默吞掉简历索引异常，导致所有候选人被误标为“证据不足”。
+    # 这里在调用 Agent 前检查并自动重建，使真实索引故障不会污染招聘判断。
+    candidate_records = {candidate.candidate_id: candidate for candidate in parsed_candidates}
+    await _ensure_candidate_indexes(candidate_profiles, candidate_records, db)
 
     # Step 3: 运行受控 ReAct Evidence Agent。
     # Agent 会通过原生 Tool Calling 动态搜索 Qdrant，并返回完整审计轨迹。

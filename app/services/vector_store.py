@@ -19,7 +19,7 @@ Qdrant 是 Rust 编写的高性能向量数据库，支持:
 from typing import List, Dict, Any, Optional
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, VectorParams
 from app.utils.config import settings
 
 
@@ -209,3 +209,34 @@ def search_similar(
         })
 
     return results
+
+
+def count_points(
+    collection_name: str,
+    filter_by: Optional[Dict[str, Any]] = None,
+) -> int:
+    """
+    统计集合中符合 Payload 条件的向量点数量。
+
+    Evidence Agent 在检索前用它区分“简历确实没有相关内容”和“该候选人根本
+    没有建立向量索引”。集合尚未创建时返回 0；连接异常继续抛给上层处理。
+    """
+    client = _get_qdrant_client()
+    if not client.collection_exists(collection_name):
+        return 0
+
+    count_filter = None
+    if filter_by:
+        count_filter = Filter(
+            must=[
+                FieldCondition(key=key, match=MatchValue(value=value))
+                for key, value in filter_by.items()
+            ]
+        )
+
+    result = client.count(
+        collection_name=collection_name,
+        count_filter=count_filter,
+        exact=True,
+    )
+    return int(result.count)

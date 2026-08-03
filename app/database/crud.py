@@ -273,6 +273,7 @@ def save_resume_chunks(
     candidate_id: str,
     chunks: list,
     qdrant_point_ids: list = None,
+    replace_existing: bool = False,
 ) -> List[models.ResumeChunk]:
     """
     保存简历的文本块记录。
@@ -284,9 +285,16 @@ def save_resume_chunks(
         candidate_id: 所属候选人ID
         chunks: Document 对象列表 (来自 document_loader)
         qdrant_point_ids: Qdrant point ID 列表 (与 chunks 一一对应)
+        replace_existing: 是否先替换旧的派生 chunk 映射，避免重新索引后重复
     返回:
         List[ResumeChunk]: 创建的 chunk 记录
     """
+    if replace_existing:
+        # ResumeChunk 是可由简历原文重新生成的派生数据，重建索引时清理旧映射。
+        db.query(models.ResumeChunk).filter(
+            models.ResumeChunk.candidate_id == candidate_id
+        ).delete(synchronize_session=False)
+
     db_chunks = []
     for i, doc in enumerate(chunks):
         chunk = models.ResumeChunk(
