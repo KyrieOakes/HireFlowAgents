@@ -42,6 +42,12 @@ class HiringState(TypedDict):
     resume_chunks: List[Dict[str, Any]]
     # retrieved_evidence: 检索到的证据，key 是候选人 ID，value 是该候选人的证据列表
     retrieved_evidence: Dict[str, List[Dict[str, Any]]]
+    # evidence_agent_runs: 每个候选人的 ReAct Tool Calling 轨迹和停止原因
+    evidence_agent_runs: List[Dict[str, Any]]
+    # evidence_interventions: 工具重试耗尽后需要人工选择的结构化问题
+    evidence_interventions: List[Dict[str, Any]]
+    # evidence_review_status: 证据人工节点的选择，用于条件路由
+    evidence_review_status: str
 
     # ---- 匹配和排序 ----
     # match_results: Match Agent 对每个候选人的评分结果列表

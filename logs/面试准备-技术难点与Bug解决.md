@@ -271,4 +271,97 @@ parsingLock.current.add(id);               // 同步加锁
 | 性能调优 | 1 | 控制 prompt/token 成本 |
 | 基础设施 | 2 | 读不到 .env、FK 约束 |
 | RAG | 2 | 索引缺失、ID 不一致 |
-| **总计** | **19** |  |
+| Agent 架构与容错 | 2 | Workflow/ReAct 组合、关键词安全误判 |
+| **总计** | **21** |  |
+
+---
+
+## 八、Agent 架构与 Tool Calling 容错
+
+### 20. 项目本质是 Workflow，如何加入真正的 ReAct 和 Tool Calling
+
+**背景:** HireFlow 原本虽然叫“多 Agent 系统”，但 Agent 都是固定节点里的单次
+LLM 调用。面试官如果追问 ReAct、Tool Calling、Observation 和错误恢复，原架构
+缺少一个可以实际演示的动态循环。
+
+**设计取舍:** 没有把整个招聘流程改成自由行动的 Supervisor Agent。招聘属于
+高风险场景，JD 解析、评分、排序和人工审核仍走确定性 LangGraph Workflow；只在
+不确定性最高、风险较低且完全只读的“简历证据检索”环节嵌入受控 ReAct 子图。
+
+```text
+reason --> search_resume_evidence Tool Call --> Qdrant Observation
+   ^                                                  |
+   |                                                  |
+   |------------ 改写查询，最多3轮 -------------------|
+                              |
+                              --> EvidencePack --> Match Agent
+```
+
+**具体实现:**
+
+- 使用 `ChatOpenAI.bind_tools()` 把搜索工具和覆盖率工具的 JSON Schema 交给模型。
+- 使用 LangGraph `StateGraph` 构建 `reason → tools → reason` 反馈循环。
+- 搜索工具必须携带当前 `candidate_id`、评分维度、查询词和 `top_k`。
+- 自定义受控 tools 节点，而不是直接放开通用工具执行器；节点统一完成候选人隔离、参数校验、错误分类、指数退避和审计。
+- Agent 最多 3 轮、6 次 Tool Call；同一组参数禁止重复调用。
+- 不保存隐藏 CoT，只保存工具名、参数、Observation、尝试次数、耗时和停止原因。
+- 工具重试耗尽后，API 和前端给出“重试、带警告继续、跳过、终止”四种选择；正式 LangGraph 流程使用 `interrupt()` + PostgresSaver 暂停恢复。
+
+**错误策略:**
+
+| 错误 | 是否原参数重试 | 最终处理 |
+|---|---:|---|
+| Timeout / ConnectionError / 429 / 5xx | 是，总尝试3次 | 耗尽后人工选择 |
+| query 为空、非法维度、重复参数 | 否 | ToolMessage 返回 Agent 改参数，最多修正2次 |
+| 工具正常但返回空列表 | 否 | 这是证据不足，不是系统异常 |
+| 跨候选人访问、受保护属性 | 否 | 立即阻断并记录安全错误 |
+| 模型调用失败 | 仅临时错误重试 | 耗尽后人工选择 |
+
+**面试说法:** “我的框架是 LangGraph/LangChain，整体架构是 deterministic
+workflow，但证据检索节点是 bounded ReAct Agent。模型通过原生 Tool Calling
+动态查询 Qdrant，再读取 ToolMessage Observation 决定是否改写查询。为了满足
+招聘场景的可控性，我设置三轮和六次工具预算，并把基础设施重试与 Agent 重新
+规划分开：网络错误指数退避，参数错误让模型改写，安全错误不重试，重试耗尽就
+通过 interrupt 交给人。最终招聘决定始终由人工完成。”
+
+### 21. 安全关键词子串误判：`age` 把 `Agent` 当成年龄查询
+
+**现象:** 第一版受保护属性过滤上线测试后，正常查询
+`Python LangGraph Agent 开发` 被立即拦截，错误信息是“查询包含受保护属性”。
+
+**根因:** 英文年龄关键词使用了简单的子串判断：`"age" in query.lower()`。
+`Agent` 转成小写后是 `agent`，其中恰好包含连续子串 `age`，因此被误判为查询年龄。
+同类问题还可能出现在 `race` 等英文词上。
+
+**解决:** 中文敏感词继续使用包含判断；英文敏感词改成正则单词边界匹配：
+
+```python
+re.search(r"\bage\b", query.lower())
+```
+
+同时保留跨候选人 ID 校验，让安全检查发生在访问 Qdrant 之前，并增加回归测试
+验证正常的 `Agent` 查询可通过、真正的 `age` 查询仍会阻断。
+
+**面试说法:** “这是典型的安全规则假阳性。简单黑名单会把 age 匹配到 Agent，
+不仅影响召回，还会让正常候选人被错误标记。我把中文包含匹配和英文词边界匹配
+分开，并用测试锁住这个边界。安全规则不能只追求拦截率，也要控制误伤率。”
+
+## ReAct Agent 高频追问速答
+
+**Q：你用的是 React、ReAct 还是 ToT？**
+
+A：前端使用 React；Agent 框架使用 LangGraph/LangChain；整体是确定性 Workflow，
+证据检索阶段使用 bounded ReAct。项目没有使用 ToT，因为当前任务不需要维护和
+剪枝多条推理树，成本和不可控性都更高。
+
+**Q：为什么不用官方 ToolNode？**
+
+A：ToolNode 适合通用工具执行，但招聘证据检索需要候选人数据隔离、受保护属性
+校验、错误分类、指数退避和详细审计。因此我保留原生 Tool Calling 协议，自定义
+受控 tools 节点；模型仍然生成标准 tool_calls，节点返回标准 ToolMessage。
+
+**Q：为什么不对所有错误都重试？**
+
+A：网络抖动和 5xx 可能自行恢复，适合原参数重试；参数错误重复调用没有意义，
+应该让 Agent 改参数；安全错误重试反而可能扩大风险，必须立即阻断；正常空结果
+是业务事实，也不应该伪装成系统异常。

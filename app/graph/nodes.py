@@ -14,11 +14,11 @@ LangGraph 自动将返回的字典合并到全局状态。
 
 from typing import Dict, Any
 from app.graph.state import HiringState
+from app.agents.evidence_agent import batch_collect_evidence, build_interventions
 from app.agents.jd_agent import analyze_jd
 from app.agents.resume_agent import parse_resume, batch_parse_resumes
 from app.agents.match_agent import match_candidate, batch_match_candidates
 from app.agents.ranking_agent import rank_candidates
-from app.services.rag_service import index_resume, search_evidence_for_match
 
 
 # ================================================================
@@ -144,27 +144,83 @@ async def evidence_retrieval_node(state: HiringState) -> Dict[str, Any]:
     if not jd_profile:
         return {"errors": ["JD profile 为空，无法检索证据"]}
 
-    evidence = {}
+    # 每个候选人运行一个有边界的 ReAct 子图；模型决定查询，工具节点负责
+    # 候选人隔离、错误分类、指数退避和审计记录。
+    evidence, run_models = await batch_collect_evidence(
+        jd_profile=jd_profile,
+        candidate_profiles=candidates,
+    )
+    intervention_models = build_interventions(run_models)
 
-    for profile in candidates:
-        candidate_id = profile.get("candidate_id", "")
+    return {
+        "retrieved_evidence": evidence,
+        "evidence_agent_runs": [run.model_dump() for run in run_models],
+        "evidence_interventions": [item.model_dump() for item in intervention_models],
+        # 重试后成功时清空之前的证据审核状态，让条件路由重新判断本轮结果。
+        "evidence_review_status": "",
+    }
 
-        if not candidate_id:
-            continue
 
-        try:
-            # 用 JD 要求检索该候选人的简历证据
-            results = search_evidence_for_match(
-                jd_profile=jd_profile,
-                candidate_id=candidate_id,
-                top_k=5,
-            )
-            evidence[candidate_id] = results
-        except Exception as e:
-            # 检索失败不阻塞流程，该候选人没有证据
-            evidence[candidate_id] = []
+# ================================================================
+# 4.1 Evidence Agent 人工介入节点
+# ================================================================
 
-    return {"retrieved_evidence": evidence}
+async def evidence_intervention_node(state: HiringState) -> Dict[str, Any]:
+    """
+    Tool Calling 无法自动恢复时暂停工作流，让用户选择继续方式。
+
+    输入是 Agent 的结构化错误列表，输出是 retry/continue/skip/abort 状态；
+    PostgresSaver 会保存中断点，服务重启后仍可继续。
+    """
+    from langgraph.types import interrupt
+
+    interventions = state.get("evidence_interventions", [])
+    decision = interrupt(
+        {
+            "status": "evidence_agent_needs_review",
+            "message": "证据 Agent 的自动重试已耗尽，请选择后续操作",
+            "interventions": interventions,
+            "available_actions": [
+                "retry_agent",
+                "continue_with_warning",
+                "skip_failed",
+                "abort",
+            ],
+        }
+    )
+    action = decision.get("action", "abort")
+
+    if action == "retry_agent":
+        return {"evidence_review_status": "retry"}
+
+    if action == "continue_with_warning":
+        return {"evidence_review_status": "continue"}
+
+    if action == "skip_failed":
+        failed_ids = {
+            item.get("candidate_id")
+            for item in interventions
+            if item.get("candidate_id")
+        }
+        remaining_profiles = [
+            profile
+            for profile in state.get("candidate_profiles", [])
+            if profile.get("candidate_id") not in failed_ids
+        ]
+        if remaining_profiles:
+            return {
+                "candidate_profiles": remaining_profiles,
+                "evidence_review_status": "continue",
+            }
+        return {
+            "evidence_review_status": "abort",
+            "errors": state.get("errors", []) + ["所有证据 Agent 失败候选人均被跳过"],
+        }
+
+    return {
+        "evidence_review_status": "abort",
+        "errors": state.get("errors", []) + ["用户终止了证据 Agent 工作流"],
+    }
 
 
 # ================================================================

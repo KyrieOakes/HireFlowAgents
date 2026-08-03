@@ -55,7 +55,7 @@ def build_workflow() -> StateGraph:
     构建完整的招聘筛选工作流。
 
     流程: START -> JD Agent -> Resume Agent -> Resume Validation
-           -> Evidence Retrieval -> Match Agent -> Ranking Agent
+           -> Evidence ReAct Agent -> Match Agent -> Ranking Agent
            -> Human Review -> END
 
     返回:
@@ -70,6 +70,7 @@ def build_workflow() -> StateGraph:
     workflow.add_node("resume_agent", nodes.resume_agent_node)
     workflow.add_node("resume_validation", nodes.resume_validation_node)
     workflow.add_node("evidence_retrieval", nodes.evidence_retrieval_node)
+    workflow.add_node("evidence_intervention", nodes.evidence_intervention_node)
     workflow.add_node("match_agent", nodes.match_agent_node)
     workflow.add_node("ranking_agent", nodes.ranking_agent_node)
     workflow.add_node("human_review", nodes.human_review_node)
@@ -81,7 +82,6 @@ def build_workflow() -> StateGraph:
     # ---- 添加普通边 (固定路径) ----
     workflow.add_edge("jd_agent", "resume_agent")
     workflow.add_edge("resume_agent", "resume_validation")
-    workflow.add_edge("evidence_retrieval", "match_agent")
     workflow.add_edge("match_agent", "ranking_agent")
     workflow.add_edge("ranking_agent", "human_review")
 
@@ -106,6 +106,27 @@ def build_workflow() -> StateGraph:
         {
             "success": "evidence_retrieval",
             "failure": "error_handler",
+        },
+    )
+
+    # 证据 Agent 成功时进入评分；工具重试耗尽时先暂停并等待人工选择。
+    workflow.add_conditional_edges(
+        "evidence_retrieval",
+        _check_evidence_agent,
+        {
+            "success": "match_agent",
+            "needs_review": "evidence_intervention",
+        },
+    )
+
+    # 人工可以重跑 Agent、带警告继续、跳过失败候选人或终止流程。
+    workflow.add_conditional_edges(
+        "evidence_intervention",
+        _check_evidence_review,
+        {
+            "retry": "evidence_retrieval",
+            "continue": "match_agent",
+            "abort": "error_handler",
         },
     )
 
@@ -148,6 +169,23 @@ def _check_errors(state: HiringState) -> str:
     检查错误是否可以重试。
     """
     return "end"
+
+
+def _check_evidence_agent(state: HiringState) -> str:
+    """检查是否存在必须由人工处理的 Tool Calling 技术错误。"""
+    if state.get("evidence_interventions"):
+        return "needs_review"
+    return "success"
+
+
+def _check_evidence_review(state: HiringState) -> str:
+    """把证据人工节点的选择映射到 LangGraph 下一条边。"""
+    status = state.get("evidence_review_status", "abort")
+    if status == "retry":
+        return "retry"
+    if status == "continue":
+        return "continue"
+    return "abort"
 
 
 def _check_review_result(state: HiringState) -> str:

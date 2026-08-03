@@ -1,13 +1,19 @@
 # HireFlow
 
-基于 LangGraph 的多 Agent 招聘筛选与面试辅助系统。
+基于 LangGraph 的多 Agent 招聘筛选与面试辅助系统。系统外层采用可控的
+确定性 Workflow，在证据检索环节嵌入受控 ReAct Agent，通过原生 Tool Calling
+动态查询候选人简历，并在自动恢复失败时进入 Human-in-the-loop。
 
 ## 项目简介
 
 HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → 粗筛 → LLM 精排 → 面试问题 → 面试评价 → 邮件草稿。
 
 **核心亮点:**
-- 7 个专业 Agent (JD/Resume/Match/Ranking/Interview/Evaluation/Email)
+- 8 个专业 Agent (JD/Resume/Evidence/Match/Ranking/Interview/Evaluation/Email)
+- Bounded ReAct Evidence Agent: `reason → tools → observation → reason`，最多 3 轮
+- 原生 Tool Calling: Qdrant 证据搜索 + 证据覆盖率检查，全轨迹可审计
+- 分层容错: 临时错误指数退避、非法参数由 Agent 修正、安全错误立即阻断
+- Agent 人工兜底: 重试 / 带警告继续 / 跳过失败候选人 / 终止本轮
 - 两阶段排序: 关键词粗筛 + LLM 精排 (ThreadPool 并行)
 - RAG 证据检索 (简历向量化 + Qdrant 语义搜索)
 - Human-in-the-loop 审核 (interrupt/resume)
@@ -15,7 +21,7 @@ HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → 粗筛 → LL
 - PDF/DOCX 文件上传 + 自动解析 + 自动命名
 - 前端产品化体验: 毛玻璃工作台、详情弹层、局部 loading、连续解析
 - LLM 稳定性兜底: 简历语义错位修复、匹配输出截断兜底评分
-- 49 个测试 (0 failures)
+- 67 个测试 (0 failures)
 - Next.js 前端 (HR/ATS 工作台风格)
 
 ## 快速开始
@@ -69,7 +75,7 @@ python run_eval.py                          # 自动化脚本
 ### 7. 测试
 
 ```bash
-pytest tests/                               # 49 tests
+pytest tests/                               # 67 tests
 pytest tests/ -v                            # 详细
 ```
 
@@ -79,11 +85,53 @@ pytest tests/ -v                            # 详细
 |---|---|---|
 | JD Agent | 解析岗位描述 | 结构化 JD + 评分 Rubric |
 | Resume Agent | 解析简历 | 候选人画像 (教育/技能/项目/经历) |
+| Evidence Agent | 受控 ReAct + Tool Calling | 简历原文证据 + 覆盖率 + 工具审计轨迹 |
 | Match Agent | 匹配评分 | 7 维度分数 + 证据 |
 | Ranking Agent | 排序 | 排名表 + Shortlist + 解释 |
 | Interview Agent | 面试问题 | 4 类定制化问题 (技术/项目/行为/风险) |
 | Evaluation Agent | 面试评价 | 技术/沟通/问题解决 + 推荐建议 |
 | Email Agent | 邮件草稿 | 面试邀请/拒信/跟进/下一轮 |
+
+## Workflow 与 ReAct 的组合架构
+
+HireFlow 没有让一个 Supervisor Agent 自由控制整个招聘过程。招聘属于高风险
+场景，因此主流程仍由 LangGraph 的固定节点和条件边控制；只有需要动态查询的
+证据检索阶段使用 ReAct。
+
+```text
+JD Agent --> Resume Agent --> Resume Validation
+                                  |
+                                  v
+                      Evidence ReAct Agent
+                                  |
+                 reason --> tool calling --> observation
+                    ^                              |
+                    |---------- 最多3轮 -----------|
+                                  |
+                    |-------------|----------------|
+                    |成功         |证据不足         |技术失败
+                    v             v                v
+                Match Agent   标记人工复核    Evidence Intervention
+                    |                              |
+                    v                    重试/继续/跳过/终止
+                Ranking Agent                       |
+                    |-------------------------------|
+                    v
+                Human Review --> END
+```
+
+### Tool Calling 与重试边界
+
+| 情况 | 处理方式 |
+|---|---|
+| Timeout、ConnectionError、HTTP 429/5xx | 原参数指数退避，总尝试 3 次 |
+| query 为空、维度非法、重复 Tool Call | 作为 ToolMessage 返回，允许 Agent 改参数 |
+| 工具正常但没有结果 | 标记 `insufficient_evidence`，不是系统错误 |
+| 跨候选人检索、受保护属性查询 | 立即阻断，不自动重试 |
+| 自动重试耗尽、模型连续非法调用 | 暂停并交给用户选择 |
+
+完整 Tool Call 轨迹包含工具名、参数、轮数、尝试次数、耗时、Observation、
+停止原因和证据覆盖率，但不会保存模型隐藏思维链。
 
 ## API 端点
 
@@ -103,7 +151,7 @@ pytest tests/ -v                            # 详细
 ### 匹配与排名
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/jobs/{id}/match?limit=N` | 两阶段匹配 (粗筛+精排) |
+| `POST` | `/jobs/{id}/match?limit=N&agent_failure_action=ask_user` | ReAct 证据检索 + 粗筛精排 |
 | `GET` | `/jobs/{id}/ranking?limit=N` | 排名结果 |
 | `GET` | `/jobs/{id}/candidates/{id}/detail` | 详细评分 |
 
@@ -136,7 +184,7 @@ pytest tests/ -v                            # 详细
 | 数据库 | PostgreSQL 16 |
 | 向量库 | Qdrant |
 | 前端 | Next.js 14 + TypeScript + Tailwind CSS |
-| 测试 | pytest (49 tests), SQLite 内存库, FastAPI TestClient |
+| 测试 | pytest (67 tests), SQLite 内存库, FastAPI TestClient |
 | 配置 | Pydantic Settings + .env |
 | 部署 | Docker Compose |
 
@@ -148,7 +196,7 @@ HireFlowAgents/
 │   ├── main.py              # FastAPI 入口
 │   ├── cli.py               # CLI Demo
 │   ├── api/                  # 6 个路由 (jobs/resumes/matching/interview/evaluation/workflow)
-│   ├── agents/               # 7 个 Agent
+│   ├── agents/               # 8 个 Agent，含受控 ReAct Evidence Agent
 │   ├── graph/                # LangGraph (state/nodes/workflow + HITL)
 │   ├── schemas/              # Pydantic 模型
 │   ├── services/             # 6 个服务 (llm/embedding/vector/document/rag/pre_screening)
@@ -156,7 +204,7 @@ HireFlowAgents/
 │   └── utils/                # config + logger
 ├── frontend/                 # Next.js (4 页面)
 ├── evaluation/               # Notebook + 评估脚本 + reports
-├── tests/                    # 49 tests (Agent/CRUD/API/E2E)
+├── tests/                    # 67 tests (Agent/Tool重试/安全/CRUD/API/E2E)
 ├── data/                     # 测试数据
 ├── logs/                     # 项目文档 + 开发日志
 ├── Dockerfile
@@ -167,6 +215,8 @@ HireFlowAgents/
 ## 安全与合规
 
 - Agent 只生成建议/草稿，不做最终决定
+- Evidence Agent 仅拥有当前候选人的只读检索工具，跨候选人调用立即阻断
+- 年龄、性别、民族、婚姻、宗教等受保护属性禁止进入检索与评分
 - `requires_human_review` / `requires_human_approval` = true
 - 邮件 `status="draft"`，审核只改状态，不发送
 - 不编造时间/地点/薪资/录用承诺
@@ -176,6 +226,8 @@ HireFlowAgents/
 
 - Resume Agent: 姓名、邮箱、电话、教育、项目、技能优先从原文规则解析，LLM 输出作为补充，避免章节标题或乱码进入画像。
 - Match Agent: prompt 自动截断，输出强制简洁；单个候选人 LLM 精排失败时返回规则兜底评分，不让 Top N 匹配整体失败。
+- Evidence Agent: 最大 3 轮、6 次 Tool Call；临时错误指数退避，非法参数允许模型修正两次，重试耗尽后进入人工选择。
+- Agent 审计: 保存 Tool Call、Observation 摘要、尝试次数、耗时、覆盖率和停止原因，不记录隐藏 CoT。
 - 前端交互: 简历解析使用单卡片 loading + 后台同步，连续解析多个候选人时页面不会白屏。
 - 详情弹层: 岗位、简历、匹配详情统一高层级弹窗和遮罩滚动，避免被导航遮挡。
 

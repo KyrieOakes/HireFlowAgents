@@ -3,7 +3,19 @@
 // ================================================================
 
 import { useEffect, useState, useRef } from "react";
-import type { Job, Candidate, RankedCandidate, MatchDetail, InterviewQuestion, InterviewEvaluation, EmailDraft } from "@/types";
+import type {
+  AgentFailureAction,
+  AgentInterventionAction,
+  Candidate,
+  EmailDraft,
+  EvidenceAgentRun,
+  EvidenceIntervention,
+  InterviewEvaluation,
+  InterviewQuestion,
+  Job,
+  MatchDetail,
+  RankedCandidate,
+} from "@/types";
 import {
   listJobs,
   listCandidates,
@@ -21,6 +33,7 @@ import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import StatusBadge from "@/components/StatusBadge";
 import ScoreBar from "@/components/ScoreBar";
+import AgentTracePanel from "@/components/AgentTracePanel";
 
 export default function MatchingPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -45,6 +58,10 @@ export default function MatchingPage() {
   const [feedback, setFeedback] = useState("");
   const [emailType, setEmailType] = useState<"interview_invite" | "rejection" | "follow_up" | "next_round">("interview_invite");
   const [stageLoading, setStageLoading] = useState<Record<string, boolean>>({});
+  // Evidence Agent 的执行轨迹与人工介入状态会直接显示在匹配结果上方。
+  const [agentRuns, setAgentRuns] = useState<EvidenceAgentRun[]>([]);
+  const [agentInterventions, setAgentInterventions] = useState<EvidenceIntervention[]>([]);
+  const [agentMessage, setAgentMessage] = useState("");
 
   // candidate_id → name 映射表 (用于显示姓名而非ID)
   const nameMap: Record<string, string> = {};
@@ -78,17 +95,27 @@ export default function MatchingPage() {
   }, [detail]);
 
   // 执行匹配 (防抖锁 + 耗时计时器)
-  async function handleMatch() {
+  async function handleMatch(agentFailureAction: AgentFailureAction = "ask_user") {
     if (!selectedJobId || matchLock.current) return;
     matchLock.current = true;
     setMatching(true);
     setError(null);
     setRanked([]);
+    setAgentInterventions([]);
     setElapsed(0);
     // 启动计时器: 每秒 +1, 让用户看到等待进度
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     try {
-      const res = await runMatching(selectedJobId, limit);
+      const res = await runMatching(selectedJobId, limit, agentFailureAction);
+      setAgentRuns(res.agent_runs || []);
+      setAgentInterventions(res.interventions || []);
+      setAgentMessage(res.message || "");
+
+      // 技术错误自动重试耗尽后，先展示人工选项，不调用不存在的排名结果。
+      if (res.status === "needs_human_review") {
+        return;
+      }
+
       const rankRes = await getRanking(selectedJobId, limit);
       setRanked(rankRes.ranked_candidates);
       setSelectedCandidateId(rankRes.ranked_candidates[0]?.candidate_id || "");
@@ -103,6 +130,23 @@ export default function MatchingPage() {
       matchLock.current = false;
       setMatching(false);
     }
+  }
+
+  /** 把前端按钮选择转换成后端的匹配失败策略。 */
+  async function handleAgentResolution(action: AgentInterventionAction) {
+    if (action === "abort") {
+      setAgentInterventions([]);
+      setAgentMessage("本轮匹配已由用户终止；已有 Agent 轨迹保留用于排查。");
+      return;
+    }
+
+    const failureAction: AgentFailureAction =
+      action === "continue_with_warning"
+        ? "continue_with_warning"
+        : action === "skip_failed"
+        ? "skip_failed"
+        : "ask_user";
+    await handleMatch(failureAction);
   }
 
   async function withStageLoading(key: string, action: () => Promise<void>) {
@@ -189,7 +233,7 @@ export default function MatchingPage() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-slate-900">执行匹配</h2>
-            <p className="mt-1 text-sm text-slate-500">粗筛候选人后调用 Match Agent 和 Ranking Agent。</p>
+            <p className="mt-1 text-sm text-slate-500">粗筛后先运行 Evidence ReAct Agent，再调用 Match Agent 和 Ranking Agent。</p>
           </div>
         </div>
         <div className="flex flex-wrap items-end gap-3">
@@ -219,7 +263,7 @@ export default function MatchingPage() {
               <option value={0}>全部</option>
             </select>
           </div>
-          <LoadingButton onClick={handleMatch} loading={matching} disabled={!selectedJobId}>
+          <LoadingButton onClick={() => handleMatch()} loading={matching} disabled={!selectedJobId}>
             开始匹配
           </LoadingButton>
         </div>
@@ -232,7 +276,7 @@ export default function MatchingPage() {
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
               </svg>
               <span className="text-sm text-sky-700">
-                正在匹配中... 正在调用 RAG 证据检索 + Match Agent + Ranking Agent
+                正在匹配中... Evidence Agent 正在规划查询并调用工具
               </span>
             </div>
             <p className="mt-2 text-xs text-sky-500">已等待 {elapsed} 秒 | 本地模型处理中, 请耐心等候</p>
@@ -243,8 +287,18 @@ export default function MatchingPage() {
         )}
       </div>
 
+      {/* ---- ReAct Agent 可审计轨迹 + 人工错误处理 ---- */}
+      <AgentTracePanel
+        runs={agentRuns}
+        interventions={agentInterventions}
+        candidateNames={nameMap}
+        message={agentMessage}
+        loading={matching}
+        onResolve={handleAgentResolution}
+      />
+
       {/* ---- 排序结果 ---- */}
-      {!matching && ranked.length === 0 ? (
+      {!matching && ranked.length === 0 && agentInterventions.length === 0 ? (
         <EmptyState title="还没有排名结果" description="选择一个岗位后点击「开始匹配」" />
       ) : (
         <>

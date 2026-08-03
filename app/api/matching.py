@@ -8,9 +8,12 @@ GET  /jobs/{job_id}/ranking   → 获取排序结果
 GET  /jobs/{job_id}/candidates/{id}/detail → 获取单个候选人的详细评分
 """
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.agents.evidence_agent import batch_collect_evidence, build_interventions
 from app.database.session import get_db
 from app.database import crud
 from app.agents.match_agent import batch_match_candidates
@@ -24,6 +27,11 @@ router = APIRouter(prefix="/jobs", tags=["matching"])
 async def run_matching(
     job_id: str,
     limit: int = 0,
+    agent_failure_action: Literal[
+        "ask_user",
+        "continue_with_warning",
+        "skip_failed",
+    ] = "ask_user",
     db: Session = Depends(get_db),
 ):
     """
@@ -35,9 +43,15 @@ async def run_matching(
         limit: 最终展示多少候选人 (0=全部)
     步骤:
     1. 粗筛: 从全部候选人中快速筛选 top_candidates
-    2. 精排: LLM 对粗筛结果进行详细评分
-    3. 排序 + 生成 shortlist
-    4. 保存结果到数据库
+    2. ReAct Evidence Agent: 动态调用 Qdrant 工具收集证据
+    3. 精排: LLM 对粗筛结果进行详细评分
+    4. 排序 + 生成 shortlist
+    5. 保存结果到数据库
+
+    agent_failure_action 控制工具错误耗尽后的行为:
+    - ask_user: 暂停评分并把可选操作返回前端
+    - continue_with_warning: 使用已有证据继续，失败候选人标记人工复核
+    - skip_failed: 跳过 Agent 技术失败的候选人
     """
     # Step 1: 获取岗位
     job = crud.get_job(db, job_id)
@@ -89,22 +103,59 @@ async def run_matching(
 
     matched_count = len(candidate_profiles)
 
-    # Step 3: RAG 证据检索 (为每个候选人检索简历证据)
-    from app.services.rag_service import search_evidence_for_match
+    # Step 3: 运行受控 ReAct Evidence Agent。
+    # Agent 会通过原生 Tool Calling 动态搜索 Qdrant，并返回完整审计轨迹。
+    evidence_by_candidate, agent_run_models = await batch_collect_evidence(
+        jd_profile=jd_profile,
+        candidate_profiles=candidate_profiles,
+    )
+    agent_runs = [run.model_dump() for run in agent_run_models]
+    intervention_models = build_interventions(agent_run_models)
+    interventions = [item.model_dump() for item in intervention_models]
 
-    evidence_by_candidate = {}
-    for c in candidate_profiles:
-        cid = c.get("candidate_id", "")
-        if cid:
-            try:
-                evidence_by_candidate[cid] = search_evidence_for_match(
-                    jd_profile=jd_profile,
-                    candidate_id=cid,
-                    top_k=5,
-                )
-            except Exception:
-                # 检索失败不阻塞流程, 该候选人无证据
-                evidence_by_candidate[cid] = []
+    # 默认策略是把不可自动恢复的工具错误交给用户选择，而不是静默当成“无证据”。
+    if interventions and agent_failure_action == "ask_user":
+        return {
+            "status": "needs_human_review",
+            "message": "证据 Agent 遇到不可自动恢复的错误，请选择后续操作",
+            "job_id": job_id,
+            "total_in_db": total_in_db,
+            "prescreened": prescreened_count,
+            "llm_scored": 0,
+            "limit": limit if limit > 0 else None,
+            "ranking": {"ranked_candidates": [], "shortlist": []},
+            "match_results": [],
+            "agent_runs": agent_runs,
+            "interventions": interventions,
+        }
+
+    if interventions and agent_failure_action == "skip_failed":
+        # 只跳过技术失败的候选人；正常完成但证据不足的候选人仍可进入人工复核。
+        failed_ids = {item.candidate_id for item in intervention_models}
+        candidate_profiles = [
+            profile
+            for profile in candidate_profiles
+            if profile.get("candidate_id") not in failed_ids
+        ]
+
+    if not candidate_profiles:
+        return {
+            "status": "needs_human_review",
+            "message": "所有候选人的证据 Agent 都失败或被跳过，无法继续评分",
+            "job_id": job_id,
+            "total_in_db": total_in_db,
+            "prescreened": prescreened_count,
+            "llm_scored": 0,
+            "limit": limit if limit > 0 else None,
+            "ranking": {"ranked_candidates": [], "shortlist": []},
+            "match_results": [],
+            "agent_runs": agent_runs,
+            "interventions": interventions,
+        }
+
+    # 经过人工选择“继续”时，失败候选人的 evidence 可能为空；Match Agent 必须
+    # 明确把它当作证据缺失，而不是把系统故障解释成候选人能力不足。
+    matched_count = len(candidate_profiles)
 
     # Step 4: 匹配评分 (传入 RAG 证据)
     rubric = job.rubric_json or jd_profile.get("rubric")
@@ -137,6 +188,8 @@ async def run_matching(
         )
 
     return {
+        "status": "completed",
+        "message": "证据 Agent、匹配评分和排序已完成",
         "job_id": job_id,
         "total_in_db": total_in_db,
         "prescreened": prescreened_count,
@@ -144,6 +197,8 @@ async def run_matching(
         "limit": limit if limit > 0 else None,
         "ranking": ranking,
         "match_results": match_results,
+        "agent_runs": agent_runs,
+        "interventions": interventions,
     }
 
 

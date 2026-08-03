@@ -121,6 +121,86 @@ export interface Evidence {
   metadata?: Record<string, any>;
 }
 
+/** Evidence ReAct Agent 的工具调用审计记录。 */
+export interface AgentToolCallTrace {
+  call_id: string;
+  iteration: number;
+  tool_name: string;
+  arguments: Record<string, any>;
+  status: "success" | "empty" | "correctable_error" | "failed" | "blocked";
+  attempts: number;
+  duration_ms: number;
+  result_count: number;
+  observation_summary: string;
+  error_category?: "transient" | "invalid_input" | "permanent" | "security" | "unknown" | null;
+  error_message?: string | null;
+}
+
+/** Evidence Agent 的结构化错误。 */
+export interface EvidenceAgentError {
+  code: string;
+  category: "transient" | "invalid_input" | "permanent" | "security" | "unknown";
+  message: string;
+  retryable: boolean;
+  tool_name?: string | null;
+  attempts: number;
+}
+
+/** 单个候选人的受控 ReAct 运行结果。 */
+export interface EvidenceAgentRun {
+  candidate_id: string;
+  status: "completed" | "insufficient_evidence" | "needs_human_review";
+  iterations: number;
+  model_retry_count: number;
+  tool_call_count: number;
+  tool_calls: AgentToolCallTrace[];
+  evidence: Evidence[];
+  coverage_rate: number;
+  covered_dimensions: string[];
+  missing_dimensions: string[];
+  reason_summary: string;
+  stop_reason: string;
+  requires_human_review: boolean;
+  errors: EvidenceAgentError[];
+}
+
+/** 工具重试耗尽后，后端提供给用户的处理选项。 */
+export interface EvidenceIntervention {
+  candidate_id: string;
+  title: string;
+  message: string;
+  error_code: string;
+  available_actions: AgentInterventionAction[];
+}
+
+/** 用户可以对失败的 Evidence Agent 执行的操作。 */
+export type AgentInterventionAction =
+  | "retry_agent"
+  | "continue_with_warning"
+  | "skip_failed"
+  | "abort";
+
+/** 调用匹配接口时发送给后端的错误处理策略。 */
+export type AgentFailureAction = "ask_user" | "continue_with_warning" | "skip_failed";
+
+/** 匹配接口统一返回结果，暂停和完成都使用同一个结构。 */
+export interface MatchingRunResponse {
+  status: "completed" | "needs_human_review";
+  message: string;
+  job_id: string;
+  total_in_db: number;
+  prescreened: number;
+  llm_scored: number;
+  limit: number | null;
+  ranking: {
+    ranked_candidates?: RankedCandidate[];
+    shortlist?: string[];
+  };
+  match_results: MatchResult[];
+  agent_runs: EvidenceAgentRun[];
+  interventions: EvidenceIntervention[];
+}
+
 /** 排序结果 */
 export interface RankingResult {
   job_id: string;

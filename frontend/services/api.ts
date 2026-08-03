@@ -8,12 +8,13 @@ import type {
   JDProfile,
   Candidate,
   CandidateProfile,
-  MatchResult,
   RankingResult,
   MatchDetail,
   InterviewQuestion,
   InterviewEvaluation,
   EmailDraft,
+  AgentFailureAction,
+  MatchingRunResponse,
 } from "@/types";
 
 // --- 配置 ---
@@ -126,18 +127,17 @@ export async function updateCandidateName(
 // 匹配 API
 // ================================================================
 
-/** 执行匹配 + 排序 (limit=0 表示全部) */
-export async function runMatching(jobId: string, limit: number = 0): Promise<{
-  job_id: string;
-  total_in_db: number;
-  prescreened: number;
-  llm_scored: number;
-  limit: number | null;
-  ranking: any;
-  match_results: MatchResult[];
-}> {
-  const params = limit > 0 ? `?limit=${limit}` : "";
-  return request(`/jobs/${jobId}/match${params}`, { method: "POST" });
+/** 执行 Evidence ReAct Agent + 匹配 + 排序。 */
+export async function runMatching(
+  jobId: string,
+  limit: number = 0,
+  agentFailureAction: AgentFailureAction = "ask_user",
+): Promise<MatchingRunResponse> {
+  // URLSearchParams 会正确编码参数，避免手工拼接多个问号或特殊字符。
+  const params = new URLSearchParams();
+  if (limit > 0) params.set("limit", String(limit));
+  params.set("agent_failure_action", agentFailureAction);
+  return request(`/jobs/${jobId}/match?${params.toString()}`, { method: "POST" });
 }
 
 /** 获取排名结果 (limit=0 返回全部) */

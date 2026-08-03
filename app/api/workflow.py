@@ -24,8 +24,10 @@ class WorkflowRunRequest(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    """恢复工作流的请求 (人工决策)。"""
-    action: str = "approve_shortlist"  # approve_shortlist / reject / modify
+    """恢复工作流的请求，可用于证据介入或最终排名审核。"""
+    # 排名审核: approve_shortlist / reject / modify
+    # 证据介入: retry_agent / continue_with_warning / skip_failed / abort
+    action: str = "approve_shortlist"
     selected_candidate_ids: List[str] = []
     comment: str = ""
 
@@ -52,6 +54,9 @@ async def run_workflow(request: WorkflowRunRequest):
         "candidate_profiles": [],
         "resume_chunks": [],
         "retrieved_evidence": {},
+        "evidence_agent_runs": [],
+        "evidence_interventions": [],
+        "evidence_review_status": "",
         "match_results": [],
         "ranking_results": [],
         "selected_candidate_ids": [],
@@ -72,11 +77,17 @@ async def run_workflow(request: WorkflowRunRequest):
     try:
         # 运行工作流直到 interrupt
         result = await workflow.ainvoke(initial_state, thread_config)
+        evidence_interventions = result.get("evidence_interventions", [])
+        workflow_status = result.get("human_review_status") or (
+            "evidence_agent_needs_review" if evidence_interventions else "running"
+        )
         return {
-            "status": result.get("human_review_status", "unknown"),
+            "status": workflow_status,
             "message": "工作流已暂停, 等待人工审核",
             "thread_id": "hireflow-run-1",
             "ranking": result.get("ranking_results", {}),
+            "evidence_agent_runs": result.get("evidence_agent_runs", []),
+            "evidence_interventions": evidence_interventions,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"工作流执行失败: {str(e)}")
@@ -134,10 +145,16 @@ async def get_workflow_state(thread_id: str):
         state = workflow.get_state(thread_config)
         if state is None:
             return {"status": "not_found", "message": "没有找到该工作流"}
+        evidence_interventions = state.values.get("evidence_interventions", [])
+        workflow_status = state.values.get("human_review_status") or (
+            "evidence_agent_needs_review" if evidence_interventions else "running"
+        )
         return {
-            "status": state.values.get("human_review_status", "running"),
+            "status": workflow_status,
             "next_step": str(state.next) if state.next else "interrupted",
             "errors": state.values.get("errors", []),
+            "evidence_agent_runs": state.values.get("evidence_agent_runs", []),
+            "evidence_interventions": evidence_interventions,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

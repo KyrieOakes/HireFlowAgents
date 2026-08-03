@@ -8,7 +8,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest, json
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -178,6 +178,86 @@ def test_approve_nonexistent(client):
     assert resp.status_code == 404
 
 
+def test_matching_pauses_for_evidence_agent_intervention(client):
+    """证据工具重试耗尽后，匹配 API 会暂停并返回四种人工选择。"""
+    from app.database import crud
+    from app.schemas.evidence_agent_schema import EvidenceAgentError, EvidenceAgentRun
+
+    # 直接准备已解析岗位和候选人，避免本测试依赖其他 Agent 的 LLM 调用。
+    db = TestingSession()
+    try:
+        job = crud.create_job(db, "需要 Python 和 LangGraph", "Agent 工程师")
+        crud.update_job_profile(
+            db,
+            job.job_id,
+            {
+                "job_title": "Agent 工程师",
+                "required_skills": ["Python", "LangGraph"],
+                "responsibilities": ["开发 Tool Calling 工作流"],
+            },
+        )
+        candidate = crud.create_candidate(db, "Python LangGraph 项目经验", "测试候选人")
+        crud.update_candidate_profile(
+            db,
+            candidate.candidate_id,
+            {
+                "candidate_id": candidate.candidate_id,
+                "name": "测试候选人",
+                "skills": ["Python", "LangGraph"],
+                "projects": [],
+                "education": [],
+                "work_experience": [],
+            },
+        )
+        job_id = job.job_id
+        candidate_id = candidate.candidate_id
+    finally:
+        db.close()
+
+    failed_run = EvidenceAgentRun(
+        candidate_id=candidate_id,
+        status="needs_human_review",
+        iterations=1,
+        tool_call_count=1,
+        evidence=[],
+        missing_dimensions=["technical_skills"],
+        reason_summary="Qdrant 连续超时",
+        stop_reason="tool_retry_exhausted",
+        requires_human_review=True,
+        errors=[
+            EvidenceAgentError(
+                code="TOOL_RETRY_EXHAUSTED",
+                category="transient",
+                message="工具连续三次超时",
+                retryable=True,
+                tool_name="search_resume_evidence",
+                attempts=3,
+            )
+        ],
+    )
+
+    with patch(
+        "app.api.matching.batch_collect_evidence",
+        new_callable=AsyncMock,
+        return_value=({candidate_id: []}, [failed_run]),
+    ):
+        response = client.post(
+            f"/jobs/{job_id}/match",
+            params={"limit": 1, "agent_failure_action": "ask_user"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "needs_human_review"
+    assert payload["llm_scored"] == 0
+    assert payload["interventions"][0]["available_actions"] == [
+        "retry_agent",
+        "continue_with_warning",
+        "skip_failed",
+        "abort",
+    ]
+
+
 # ================================================================
 # 端到端冒烟测试: 解析→RAG索引→匹配→面试问题→评价→邮件
 # ================================================================
@@ -237,26 +317,62 @@ def test_full_pipeline_smoke(client):
 
     # Step 3: 匹配评分 + 排序
     from app.schemas.match_schema import MatchResult, DimensionScores
-    with patch("app.agents.match_agent.call_llm_structured") as mock_match:
-        mock_match.return_value = MatchResult(
-            candidate_id=cid, total_score=85.0,
-            dimension_scores=DimensionScores(
-                technical_skills=28, project_relevance=18,
-                experience=12, education=8, domain_relevance=9,
-                communication=4, risk_penalty=-4,
-            ),
-            strengths=["Python+FastAPI经验丰富"],
-            risks=["RAG项目细节需验证"],
-            recommendation="Strong Match",
-            summary="总体匹配良好",
-        )
-        with patch("app.agents.ranking_agent.call_llm") as mock_rank:
-            mock_rank.return_value = "排名合理, 张三排第一"
-            r3 = client.post(f"/jobs/{jid}/match", params={"limit": 5})
-            assert r3.status_code == 200
-            data3 = r3.json()
-            assert data3["llm_scored"] >= 1
-            assert len(data3["ranking"]["ranked_candidates"]) >= 1
+    from app.schemas.evidence_agent_schema import EvidenceAgentRun, ToolCallTrace
+    evidence_run = EvidenceAgentRun(
+        candidate_id=cid,
+        status="completed",
+        iterations=2,
+        tool_call_count=1,
+        tool_calls=[
+            ToolCallTrace(
+                call_id="smoke-tool-1",
+                iteration=1,
+                tool_name="search_resume_evidence",
+                arguments={
+                    "candidate_id": cid,
+                    "dimension": "technical_skills",
+                    "query": "Python FastAPI",
+                    "top_k": 3,
+                },
+                status="success",
+                result_count=1,
+                observation_summary="找到 1 条证据",
+            )
+        ],
+        evidence=[{"text": "Python FastAPI 项目经验", "score": 0.9}],
+        coverage_rate=0.5,
+        covered_dimensions=["technical_skills"],
+        missing_dimensions=["experience"],
+        reason_summary="已找到技术证据",
+        stop_reason="evidence_collected",
+    )
+    with patch(
+        "app.api.matching.batch_collect_evidence",
+        new_callable=AsyncMock,
+        return_value=({cid: evidence_run.evidence}, [evidence_run]),
+    ):
+        with patch("app.agents.match_agent.call_llm_structured") as mock_match:
+            mock_match.return_value = MatchResult(
+                candidate_id=cid, total_score=85.0,
+                dimension_scores=DimensionScores(
+                    technical_skills=28, project_relevance=18,
+                    experience=12, education=8, domain_relevance=9,
+                    communication=4, risk_penalty=-4,
+                ),
+                strengths=["Python+FastAPI经验丰富"],
+                risks=["RAG项目细节需验证"],
+                recommendation="Strong Match",
+                summary="总体匹配良好",
+            )
+            with patch("app.agents.ranking_agent.call_llm") as mock_rank:
+                mock_rank.return_value = "排名合理, 张三排第一"
+                r3 = client.post(f"/jobs/{jid}/match", params={"limit": 5})
+                assert r3.status_code == 200
+                data3 = r3.json()
+                assert data3["status"] == "completed"
+                assert data3["llm_scored"] >= 1
+                assert len(data3["ranking"]["ranked_candidates"]) >= 1
+                assert data3["agent_runs"][0]["tool_calls"][0]["attempts"] == 1
 
     # Step 4: 面试问题生成
     with patch("app.agents.interview_agent.call_llm") as mock_q:

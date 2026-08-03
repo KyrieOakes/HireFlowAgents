@@ -132,10 +132,39 @@ class DocumentSettings(BaseSettings):
 # ============================================================
 
 class LogSettings(BaseSettings):
+    """日志等级配置。"""
+
     level: str = "INFO"
 
     class Config:
         env_prefix = "LOG_"
+
+
+# ============================================================
+# 受控 ReAct 证据 Agent 配置
+# ============================================================
+
+class EvidenceAgentSettings(BaseSettings):
+    """
+    证据 Agent 的执行预算和重试策略。
+
+    所有数值都可以通过 EVIDENCE_AGENT_ 前缀环境变量覆盖，便于在本地模型
+    和云端模型之间分别调节速度与稳定性。
+    """
+
+    # 最多执行 3 次模型决策，防止 ReAct 循环无限运行。
+    max_iterations: int = 3
+    # 一次候选人检索最多执行 6 个 Tool Call。
+    max_tool_calls: int = 6
+    # 总尝试次数包含第一次调用，因此 3 表示最多自动重试两次。
+    max_attempts: int = 3
+    # 第一次重试等待 0.5 秒，之后按 2 倍指数退避。
+    initial_retry_interval: float = 0.5
+    # 模型连续两次生成非法工具参数后停止并交给人工。
+    max_correctable_errors: int = 2
+
+    class Config:
+        env_prefix = "EVIDENCE_AGENT_"
 
 
 # ============================================================
@@ -149,6 +178,7 @@ class Settings(BaseSettings):
     qdrant: QdrantSettings = QdrantSettings()
     document: DocumentSettings = DocumentSettings()
     log: LogSettings = LogSettings()
+    evidence_agent: EvidenceAgentSettings = EvidenceAgentSettings()
 
     class Config:
         env_file = ".env"
