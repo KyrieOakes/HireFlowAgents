@@ -49,6 +49,39 @@ ALLOWED_DIMENSIONS = {
     "domain_relevance",
 }
 
+# 本地模型有时会使用更自然的短名称，先映射为系统内部标准维度。
+DIMENSION_ALIASES = {
+    "technical": "technical_skills",
+    "technical_skill": "technical_skills",
+    "skills": "technical_skills",
+    "skill": "technical_skills",
+    "技术": "technical_skills",
+    "技术技能": "technical_skills",
+    "project": "project_relevance",
+    "projects": "project_relevance",
+    "project_experience": "project_relevance",
+    "项目": "project_relevance",
+    "项目经验": "project_relevance",
+    "work_experience": "experience",
+    "工作经验": "experience",
+    "经历": "experience",
+    "edu": "education",
+    "教育": "education",
+    "学历": "education",
+    "domain": "domain_relevance",
+    "行业": "domain_relevance",
+    "领域": "domain_relevance",
+}
+
+# 只兼容语义完全相同的工具名，其他未知工具仍会被拒绝并要求模型修正。
+TOOL_NAME_ALIASES = {
+    "search_evidence": "search_resume_evidence",
+    "resume_search": "search_resume_evidence",
+    "search_resume": "search_resume_evidence",
+    "check_evidence_coverage": "inspect_evidence_coverage",
+    "inspect_coverage": "inspect_evidence_coverage",
+}
+
 # 受保护属性不会参与证据搜索或候选人评分。
 PROTECTED_ATTRIBUTE_TERMS = {
     "年龄",
@@ -133,6 +166,69 @@ def _required_dimensions(jd_profile: Dict[str, Any]) -> List[str]:
     return dimensions or ["technical_skills", "project_relevance", "experience"]
 
 
+def _normalize_dimension(
+    raw_dimension: Any,
+    query: str,
+    required_dimensions: List[str],
+) -> str:
+    """
+    把本地模型的维度别名转换成系统标准字段。
+
+    模型省略 dimension 时会根据查询词做轻量判断；仍无法判断时选择当前 JD
+    的第一个必需维度，避免仅因非核心展示参数缺失就终止整批匹配。
+    """
+    normalized = str(raw_dimension or "").strip().lower()
+    if normalized in ALLOWED_DIMENSIONS:
+        return normalized
+    if normalized in DIMENSION_ALIASES:
+        return DIMENSION_ALIASES[normalized]
+
+    lowered_query = query.lower()
+    if any(term in lowered_query for term in ["项目", "project", "职责", "落地"]):
+        return "project_relevance"
+    if any(term in lowered_query for term in ["经验", "年限", "experience", "任职"]):
+        return "experience"
+    if any(term in lowered_query for term in ["教育", "学历", "学校", "education", "degree"]):
+        return "education"
+    if any(term in lowered_query for term in ["行业", "领域", "domain", "industry"]):
+        return "domain_relevance"
+    if query:
+        return "technical_skills"
+    return required_dimensions[0] if required_dimensions else "technical_skills"
+
+
+def _fallback_query_for_dimension(
+    dimension: str,
+    jd_profile: Dict[str, Any],
+) -> str:
+    """模型没有生成 query 时，依据 JD 为当前维度构造安全的确定性查询。"""
+    if dimension == "technical_skills":
+        parts = (
+            jd_profile.get("required_skills", [])[:5]
+            + jd_profile.get("technical_requirements", [])[:4]
+        )
+    elif dimension == "project_relevance":
+        parts = (
+            jd_profile.get("responsibilities", [])[:3]
+            + jd_profile.get("preferred_skills", [])[:3]
+        )
+    elif dimension == "experience":
+        requirement = jd_profile.get("experience_requirements", "")
+        parts = [requirement, "项目职责 工作经验 任职时间"]
+    elif dimension == "education":
+        parts = jd_profile.get("education_requirements", [])[:4]
+    else:
+        parts = [
+            jd_profile.get("industry", ""),
+            jd_profile.get("job_title", ""),
+            "领域相关经验",
+        ]
+
+    query = " ".join(str(part).strip() for part in parts if str(part).strip())
+    # 极少数历史 JD 全为空时仍给出可执行的通用查询，不让工具收到空字符串。
+    return query[:300] or f"{jd_profile.get('job_title', '岗位')} 相关项目经验"
+
+
 def _contains_protected_attribute(query: str) -> bool:
     """检查查询词是否包含招聘评分中禁止使用的受保护属性。"""
     normalized = query.lower()
@@ -215,12 +311,17 @@ def _build_tool_schemas() -> List[Any]:
 
     @tool
     def search_resume_evidence(
-        candidate_id: str,
         dimension: str,
         query: str,
         top_k: int = 3,
+        candidate_id: str = "",
     ) -> Dict[str, Any]:
-        """在当前候选人的简历向量索引中搜索某个评分维度的原文证据。"""
+        """
+        在当前候选人的简历向量索引中搜索某个评分维度的原文证据。
+
+        candidate_id 由运行时自动注入，模型可以留空；如果主动填写，则只能填写
+        当前候选人 ID。
+        """
         # 这个函数体不会直接执行，受控 tools 节点会按照同一参数执行真实检索。
         return {
             "candidate_id": candidate_id,
@@ -287,7 +388,7 @@ def _build_prompt(
 必要时调用 inspect_evidence_coverage 查看缺失维度。
 
 严格规则：
-1. 只能检索当前 candidate_id，禁止查询其他候选人。
+1. candidate_id 由系统自动注入，调用工具时不要填写 candidate_id。
 2. 禁止搜索年龄、性别、民族、婚姻、宗教等受保护属性。
 3. 查询词必须短且具体；没有结果时应改写查询，而不是重复完全相同的参数。
 4. 不得作出录用、淘汰或最终排名决定。
@@ -441,8 +542,16 @@ async def run_evidence_agent(
 
             tool_call_count += 1
             call_id = str(raw_call.get("id") or f"tool-{tool_call_count}")
-            tool_name = str(raw_call.get("name", ""))
-            arguments = raw_call.get("args", {}) or {}
+            raw_tool_name = str(raw_call.get("name", ""))
+            tool_name = TOOL_NAME_ALIASES.get(raw_tool_name, raw_tool_name)
+            raw_arguments = raw_call.get("args", {}) or {}
+            # 某些 OpenAI 兼容本地模型会把 args 返回成 JSON 字符串，这里先做兼容解析。
+            if isinstance(raw_arguments, str):
+                try:
+                    raw_arguments = json.loads(raw_arguments)
+                except json.JSONDecodeError:
+                    raw_arguments = {}
+            arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else {}
             started_at = time.perf_counter()
             attempts = 1
             result_count = 0
@@ -453,19 +562,38 @@ async def run_evidence_agent(
 
             try:
                 if tool_name == "search_resume_evidence":
-                    requested_candidate = str(arguments.get("candidate_id", "")).strip()
-                    dimension = str(arguments.get("dimension", "")).strip()
-                    query = str(arguments.get("query", "")).strip()
+                    supplied_candidate = str(arguments.get("candidate_id", "")).strip()
+                    # query_text/search_query 是本地模型常见的同义参数名。
+                    query = str(
+                        arguments.get("query")
+                        or arguments.get("query_text")
+                        or arguments.get("search_query")
+                        or ""
+                    ).strip()
+                    dimension = _normalize_dimension(
+                        arguments.get("dimension")
+                        or arguments.get("category")
+                        or arguments.get("evidence_type"),
+                        query,
+                        required_dimensions,
+                    )
+                    if not query:
+                        query = _fallback_query_for_dimension(dimension, jd_profile)
                     top_k = arguments.get("top_k", 3)
 
-                    # candidate_id 必须与当前图状态完全一致，防止跨候选人数据泄漏。
-                    if requested_candidate != candidate_id:
+                    # 数字字符串是本地模型常见输出，可以无损转换为整数。
+                    if isinstance(top_k, str) and top_k.isdigit():
+                        top_k = int(top_k)
+
+                    # 空 ID 代表让运行时注入当前候选人；只有主动填写其他非空 ID
+                    # 才属于真正的跨候选人访问并触发安全阻断。
+                    if supplied_candidate and supplied_candidate != candidate_id:
                         raise EvidenceSecurityError(
-                            f"禁止跨候选人检索: 当前 {candidate_id}, 请求 {requested_candidate or '空'}"
+                            f"禁止跨候选人检索: 当前 {candidate_id}, 请求 {supplied_candidate}"
                         )
                     if dimension not in ALLOWED_DIMENSIONS:
                         raise ValueError(f"不支持的证据维度: {dimension}")
-                    if not query or len(query) > 300:
+                    if len(query) > 300:
                         raise ValueError("query 必须是 1-300 字符的具体检索词")
                     if _contains_protected_attribute(query):
                         raise EvidenceSecurityError("查询包含招聘中禁止使用的受保护属性")
@@ -475,7 +603,7 @@ async def run_evidence_agent(
                     signature = json.dumps(
                         {
                             "tool": tool_name,
-                            "candidate_id": requested_candidate,
+                            "candidate_id": candidate_id,
                             "dimension": dimension,
                             "query": query,
                             "top_k": top_k,
@@ -486,6 +614,14 @@ async def run_evidence_agent(
                     if signature in seen_signatures:
                         raise ValueError("完全相同的 Tool Call 已经执行过，请改写查询")
                     seen_signatures.append(signature)
+
+                    # 审计轨迹记录系统实际执行的规范参数，而不是模型的残缺原始参数。
+                    arguments = {
+                        "candidate_id": candidate_id,
+                        "dimension": dimension,
+                        "query": query,
+                        "top_k": top_k,
+                    }
 
                     async def execute_search() -> List[Dict[str, Any]]:
                         """在线程中执行同步 Qdrant 检索，避免阻塞 FastAPI 事件循环。"""
@@ -553,6 +689,16 @@ async def run_evidence_agent(
                         "status": status,
                         "error": error_message,
                         "instruction": "请修改工具参数后再试，不要重复相同调用。",
+                        "valid_example": {
+                            "name": "search_resume_evidence",
+                            "args": {
+                                "dimension": required_dimensions[0],
+                                "query": _fallback_query_for_dimension(
+                                    required_dimensions[0], jd_profile
+                                ),
+                                "top_k": 3,
+                            },
+                        },
                     }
                     if correctable_error_count >= agent_config.max_correctable_errors:
                         error = EvidenceAgentError(
