@@ -81,14 +81,20 @@ def update_job_profile(
     """
     job = get_job(db, job_id)
     if job:
-        # 将 Python 字典直接存入 JSON 列
-        job.jd_profile_json = jd_profile
+        # 复制一份再写入 JSON，避免修改调用方持有的原始字典。
+        updated_profile = dict(jd_profile)
+        if job.title:
+            # 只要岗位已有权威展示名称，结构化 JD 也必须使用同一名称。
+            # 这样重新解析后，列表标题和详情 JSON 不会出现两个不同岗位名。
+            updated_profile["job_title"] = job.title
+        # 将 Python 字典直接存入 JSON 列。
+        job.jd_profile_json = updated_profile
         if rubric:
             job.rubric_json = rubric
         # 只有岗位尚未命名时才采用模型解析出的标题。
         # 这样用户创建时填写或后续人工修改的标题，不会在“重新解析 JD”后被模型覆盖。
-        if not job.title and jd_profile.get("job_title"):
-            job.title = jd_profile["job_title"]
+        if not job.title and updated_profile.get("job_title"):
+            job.title = updated_profile["job_title"]
         db.commit()
         db.refresh(job)
     return job
