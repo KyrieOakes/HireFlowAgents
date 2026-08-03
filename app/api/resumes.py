@@ -172,8 +172,6 @@ async def upload_resume_file(
         )
 
     # Step 2: 读取文件内容
-    rag_indexed = False
-    rag_index_warning = None
     try:
         content = await file.read()
     except Exception as e:
@@ -242,6 +240,9 @@ async def parse_resume_endpoint(
 
     # ---- RAG 索引: 切分简历 → Embedding → Qdrant ----
     from app.services.rag_service import index_resume_text
+    # 即使索引失败也要给响应稳定的状态字段，不能引用尚未赋值的局部变量。
+    rag_indexed = False
+    rag_index_warning = None
     try:
         point_ids = index_resume_text(
             resume_text=candidate.resume_text,

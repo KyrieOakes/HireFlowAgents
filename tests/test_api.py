@@ -251,6 +251,10 @@ def test_matching_pauses_for_evidence_agent_intervention(client):
     )
 
     with patch(
+        "app.api.matching._ensure_candidate_indexes",
+        new_callable=AsyncMock,
+        return_value=0,
+    ), patch(
         "app.api.matching.batch_collect_evidence",
         new_callable=AsyncMock,
         return_value=({candidate_id: []}, [failed_run]),
@@ -361,6 +365,10 @@ def test_full_pipeline_smoke(client):
         stop_reason="evidence_collected",
     )
     with patch(
+        "app.api.matching._ensure_candidate_indexes",
+        new_callable=AsyncMock,
+        return_value=0,
+    ), patch(
         "app.api.matching.batch_collect_evidence",
         new_callable=AsyncMock,
         return_value=({cid: evidence_run.evidence}, [evidence_run]),

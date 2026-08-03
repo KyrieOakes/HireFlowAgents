@@ -270,9 +270,9 @@ parsingLock.current.add(id);               // 同步加锁
 | LLM 输出质量 | 3 | JSON 解析、中文输出、匹配输出截断 |
 | 性能调优 | 1 | 控制 prompt/token 成本 |
 | 基础设施 | 2 | 读不到 .env、FK 约束 |
-| RAG | 2 | 索引缺失、ID 不一致 |
+| RAG | 3 | 索引缺失、ID 不一致、空检索掩盖索引故障 |
 | Agent 架构与容错 | 3 | Workflow/ReAct 组合、关键词安全误判、本地 Tool Call 参数兼容 |
-| **总计** | **22** |  |
+| **总计** | **23** |  |
 
 ---
 
@@ -371,6 +371,31 @@ Tool Call 没有填写 `candidate_id`，被报成 `TOOL_SECURITY_BLOCKED`；另�
 模型生成参数。候选人 ID 属于授权边界，所以我不让模型决定，而是从图状态注入；
 空 ID 可以补全，非空且不同的 ID 才阻断。对本地模型常见的字段别名我做白名单
 规范化，但不会放宽安全边界。这既降低误报，也避免模型越权访问其他候选人。”
+
+### 23. 所有候选人都显示 `search_completed_without_evidence`
+
+**现象:** Agent 没有抛异常，所有 Tool Call 都显示“未找到证据”，最终每位候选人
+都是 `search_completed_without_evidence`。看起来像所有简历都没有相关项目，实际
+上 Qdrant 中根本没有这些候选人的向量块。
+
+**根因:** 简历解析由两个相互独立的步骤组成：Resume Agent 生成画像，以及
+Embedding + Qdrant 建立 RAG 索引。旧代码为了不阻塞画像解析，用空 `except/pass`
+吞掉了索引异常。因此用户看到“已解析”，但 Embedding 模型未加载或 Qdrant 不可用
+时，索引实际上没有建立。Qdrant 带 `candidate_id` 过滤的搜索返回空列表后，Agent
+又把它当成正常业务空结果，最终把基础设施故障错误归因成候选人缺少证据。
+
+**解决:** 建立三层防线：
+
+- 简历解析响应增加 `rag_indexed` 和 `rag_index_warning`，索引失败不再静默。
+- 匹配前按 `candidate_id` 统计 Qdrant 点数；缺失时使用 PostgreSQL 保存的简历原文
+  自动重新切块、生成 Embedding 并写回 Qdrant。
+- Tool 搜索返回空列表后再次确认候选人索引是否存在；索引缺失抛
+  `ResumeIndexMissingError`，作为基础设施错误交给人工，而不再标记业务证据不足。
+
+**面试说法:** “空结果不一定是业务事实，也可能是上游数据管道没有成功执行。
+Qdrant 没设置相似度阈值时，只要 candidate_id 下存在向量，Top K 就至少返回一条；
+所以零结果可以作为索引缺失的强信号。我增加了匹配前健康检查和自动重建，并把
+索引缺失与真实低相关证据分开建模，避免系统故障影响候选人判断。”
 
 ## ReAct Agent 高频追问速答
 
