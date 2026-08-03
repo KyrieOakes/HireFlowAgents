@@ -391,6 +391,9 @@ Embedding + Qdrant 建立 RAG 索引。旧代码为了不阻塞画像解析，�
   自动重新切块、生成 Embedding 并写回 Qdrant。
 - Tool 搜索返回空列表后再次确认候选人索引是否存在；索引缺失抛
   `ResumeIndexMissingError`，作为基础设施错误交给人工，而不再标记业务证据不足。
+- 实际联调继续发现新版 `langchain-qdrant` 不允许 dense 模式使用
+  `embedding=None`。项目已经自行生成向量，因此移除无用的 `QdrantVectorStore`
+  包装，集合初始化直接返回 QdrantClient，再用底层 `upsert` 写入向量和 Payload。
 
 **面试说法:** “空结果不一定是业务事实，也可能是上游数据管道没有成功执行。
 Qdrant 没设置相似度阈值时，只要 candidate_id 下存在向量，Top K 就至少返回一条；

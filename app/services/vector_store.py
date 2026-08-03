@@ -17,7 +17,6 @@ Qdrant 是 Rust 编写的高性能向量数据库，支持:
 """
 
 from typing import List, Dict, Any, Optional
-from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, VectorParams
 from app.utils.config import settings
@@ -28,7 +27,7 @@ def _get_qdrant_client() -> QdrantClient:
     创建 Qdrant 客户端连接。
 
     QdrantClient 是底层连接对象，用于管理 Collection (建表、删表等)。
-    上层检索使用 QdrantVectorStore (LangChain 封装)。
+    本项目已经在 embedding_service 中生成向量，所以这里只使用底层 QdrantClient。
 
     返回:
         QdrantClient: Qdrant 底层客户端
@@ -47,7 +46,7 @@ def _get_qdrant_client() -> QdrantClient:
 def init_collection(
     collection_name: str,
     vector_size: int = 2560,  # qwen3-embedding-4b 维度 = 2560
-) -> QdrantVectorStore:
+) -> QdrantClient:
     """
     初始化 Qdrant 集合 (Collection)。
 
@@ -58,7 +57,7 @@ def init_collection(
         collection_name: 集合名称，如 "resumes" 或 "job_descriptions"
         vector_size: 向量维度 (text-embedding-qwen3-embedding-4b = 2560)
     返回:
-        QdrantVectorStore: LangChain 封装的上层检索接口
+        QdrantClient: 后续写入可以复用的底层客户端
     """
     client = _get_qdrant_client()
 
@@ -79,15 +78,10 @@ def init_collection(
             ),
         )
 
-    # 用 LangChain 封装返回，方便后续操作
-    # QdrantVectorStore 提供了 add_documents, similarity_search 等上层方法
-    embedding_client = None  # 这里不传 embedding，用手动生成的向量
-    vector_store = QdrantVectorStore(
-        client=client,
-        collection_name=collection_name,
-    )
-
-    return vector_store
+    # 项目使用 OpenAI SDK 手动生成向量，再通过 client.upsert 写入。
+    # 不能构造 embedding=None 的 QdrantVectorStore：新版 langchain-qdrant
+    # 会在 dense 模式下直接拒绝空 embedding，导致真正 upsert 前就失败。
+    return client
 
 
 def store_chunks(
@@ -117,7 +111,7 @@ def store_chunks(
     from langchain_core.documents import Document
 
     # 确保集合存在
-    vector_store = init_collection(collection_name)
+    client = init_collection(collection_name)
 
     # 构造 Document 对象列表
     # LangChain 的 Document 是一个数据类，包含 page_content 和 metadata
@@ -132,8 +126,7 @@ def store_chunks(
     # 2. 存储文本和元数据
     # 注意: 我们手动传入了 embeddings，所以 Qdrant 不会再调用 embedding API
     # 使用 add_documents 的方式，需要传入 ids 并手动调用 client.upsert
-    # 简化方案: 直接用底层 client 的 upsert
-    client = _get_qdrant_client()
+    # 直接复用 init_collection 返回的底层客户端，避免重复创建连接。
 
     # 生成唯一 ID 列表 (如果外部传入了 point_ids 则使用外部ID)
     import uuid
