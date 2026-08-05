@@ -76,6 +76,11 @@ export default function MatchingPage() {
   const nameMap: Record<string, string> = {};
   candidates.forEach((c) => { nameMap[c.candidate_id] = c.name || c.candidate_id; });
 
+  // 人工审核前展示完整排名，方便 HR 对比和勾选；审核完成后只展示最终入选名单。
+  const visibleRanked = workflowStatus === "completed"
+    ? ranked.filter((candidate) => reviewCandidateIds.includes(candidate.candidate_id))
+    : ranked;
+
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -428,17 +433,19 @@ export default function MatchingPage() {
       )}
 
       {/* ---- 排序结果 ---- */}
-      {!matching && ranked.length === 0 && agentInterventions.length === 0 ? (
+      {!matching && visibleRanked.length === 0 && agentInterventions.length === 0 ? (
         <EmptyState title="还没有排名结果" description="选择一个岗位后点击「开始匹配」" />
       ) : (
         <>
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="section-label">排名结果</h2>
+            <h2 className="section-label">
+              {workflowStatus === "completed" ? "已确认的面试名单" : "排名结果"}
+            </h2>
             <span className="text-xs text-slate-400">人工确认后，仅入选候选人可以进入面试跟进</span>
           </div>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
             <div className="space-y-4">
-            {ranked.map((c, i) => (
+            {visibleRanked.map((c, i) => (
               <div
                 key={c.candidate_id}
                 className={`focus-card cursor-pointer p-4 ${selectedCandidateId === c.candidate_id ? "border-sky-300 ring-2 ring-sky-100" : ""}`}
