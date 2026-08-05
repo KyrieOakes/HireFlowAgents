@@ -13,8 +13,6 @@ import type {
   InterviewQuestion,
   InterviewEvaluation,
   EmailDraft,
-  AgentFailureAction,
-  MatchingRunResponse,
   WorkflowResponse,
   WorkflowResumeAction,
 } from "@/types";
@@ -139,19 +137,6 @@ export async function updateCandidateName(
 // ================================================================
 // 匹配 API
 // ================================================================
-
-/** 执行 Evidence ReAct Agent + 匹配 + 排序。 */
-export async function runMatching(
-  jobId: string,
-  limit: number = 0,
-  agentFailureAction: AgentFailureAction = "ask_user",
-): Promise<MatchingRunResponse> {
-  // URLSearchParams 会正确编码参数，避免手工拼接多个问号或特殊字符。
-  const params = new URLSearchParams();
-  if (limit > 0) params.set("limit", String(limit));
-  params.set("agent_failure_action", agentFailureAction);
-  return request(`/jobs/${jobId}/match?${params.toString()}`, { method: "POST" });
-}
 
 /** 启动 LangGraph 主匹配流程，并运行到证据审核或最终排名审核中断点。 */
 export async function startMatchingWorkflow(

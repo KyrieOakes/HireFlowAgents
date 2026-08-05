@@ -870,13 +870,14 @@ GET /resumes/
 DELETE /resumes/{candidate_id}
 ```
 
-### 13.3 Matching APIs
+### 13.3 Matching Result APIs
 
 ```text
-POST /jobs/{job_id}/match?limit=N
 GET /jobs/{job_id}/ranking?limit=N
 GET /jobs/{job_id}/candidates/{candidate_id}/detail
 ```
+
+匹配执行不再提供独立 Job 路由，统一通过 13.6 的 LangGraph Workflow API 启动。
 
 ### 13.4 Interview APIs
 
@@ -899,8 +900,8 @@ POST /email-drafts/{email_id}/approve
 
 ```text
 POST /workflow/run
-POST /workflow/{workflow_id}/resume
-GET /workflow/{workflow_id}/state
+POST /workflow/{thread_id}/resume
+GET /workflow/{thread_id}/state
 ```
 
 ## 14. 前端页面设计

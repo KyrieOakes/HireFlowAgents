@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.database import crud
 from app.database.session import get_db
 from app.graph.state import HiringState
+from app.services.matching_service import ensure_candidate_indexes
 from app.services.pre_screening import pre_screen_candidates
 
 
@@ -98,7 +99,7 @@ async def _prepare_initial_state(
         all_profiles.append(profile)
         records_by_id[candidate.candidate_id] = candidate
 
-    # 与原 /jobs/{job_id}/match 完全保持一致：先扩大粗筛池，再取用户要求的 Top-N。
+    # 保持既有筛选语义：先扩大关键词粗筛池，再取用户要求的 Top-N 进入精排。
     pool_size = (
         max(request.limit * 3, 15)
         if request.limit > 0
@@ -117,9 +118,7 @@ async def _prepare_initial_state(
     )
 
     # Evidence Agent 依赖 Qdrant；缺失索引时沿用原匹配 API 的自动重建逻辑。
-    from app.api.matching import _ensure_candidate_indexes
-
-    await _ensure_candidate_indexes(selected_profiles, records_by_id, db)
+    await ensure_candidate_indexes(selected_profiles, records_by_id, db)
 
     # Match Agent 从 jd_profile.rubric 读取评分规则，因此把数据库独立列合并进状态副本。
     jd_profile = dict(job.jd_profile_json)

@@ -161,7 +161,7 @@ def test_prepare_initial_state_reuses_database_profiles():
             "app.api.workflow.pre_screen_candidates",
             return_value=[{"candidate_id": "C-1", "name": "人工确认姓名", "skills": ["Python"]}],
         ), patch(
-            "app.api.matching._ensure_candidate_indexes",
+            "app.api.workflow.ensure_candidate_indexes",
             new_callable=AsyncMock,
             return_value=0,
         ) as ensure_indexes:

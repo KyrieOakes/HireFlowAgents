@@ -8,12 +8,15 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest, json
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
+from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database.session import Base, get_db
+from app.graph.workflow import build_workflow
 from app.main import app
 
 # SQLite 内存库
@@ -47,6 +50,12 @@ def setup_db():
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@asynccontextmanager
+async def open_test_workflow():
+    """API 测试使用内存 checkpoint，避免依赖本机 PostgreSQL 服务。"""
+    yield build_workflow(InMemorySaver())
 
 
 # ---- 岗位 API ----
@@ -192,8 +201,8 @@ def test_approve_nonexistent(client):
     assert resp.status_code == 404
 
 
-def test_matching_pauses_for_evidence_agent_intervention(client):
-    """证据工具重试耗尽后，匹配 API 会暂停并返回四种人工选择。"""
+def test_workflow_pauses_for_evidence_agent_intervention(client):
+    """证据工具重试耗尽后，LangGraph 会暂停并返回四种人工选择。"""
     from app.database import crud
     from app.schemas.evidence_agent_schema import EvidenceAgentError, EvidenceAgentRun
 
@@ -251,22 +260,25 @@ def test_matching_pauses_for_evidence_agent_intervention(client):
     )
 
     with patch(
-        "app.api.matching._ensure_candidate_indexes",
+        "app.api.workflow.ensure_candidate_indexes",
         new_callable=AsyncMock,
         return_value=0,
     ), patch(
-        "app.api.matching.batch_collect_evidence",
+        "app.graph.nodes.batch_collect_evidence",
         new_callable=AsyncMock,
         return_value=({candidate_id: []}, [failed_run]),
+    ), patch(
+        "app.graph.workflow.open_workflow",
+        new=open_test_workflow,
     ):
         response = client.post(
-            f"/jobs/{job_id}/match",
-            params={"limit": 1, "agent_failure_action": "ask_user"},
+            "/workflow/run",
+            json={"job_id": job_id, "limit": 1},
         )
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "needs_human_review"
+    assert payload["status"] == "evidence_agent_needs_review"
     assert payload["llm_scored"] == 0
     assert payload["interventions"][0]["available_actions"] == [
         "retry_agent",
@@ -274,6 +286,14 @@ def test_matching_pauses_for_evidence_agent_intervention(client):
         "skip_failed",
         "abort",
     ]
+
+
+def test_legacy_direct_matching_route_is_removed(client):
+    """OpenAPI 中只能存在 LangGraph 匹配入口，防止新旧编排长期并存。"""
+    paths = client.get("/openapi.json").json()["paths"]
+
+    assert "/jobs/{job_id}/match" not in paths
+    assert "/workflow/run" in paths
 
 
 # ================================================================
@@ -365,13 +385,16 @@ def test_full_pipeline_smoke(client):
         stop_reason="evidence_collected",
     )
     with patch(
-        "app.api.matching._ensure_candidate_indexes",
+        "app.api.workflow.ensure_candidate_indexes",
         new_callable=AsyncMock,
         return_value=0,
     ), patch(
-        "app.api.matching.batch_collect_evidence",
+        "app.graph.nodes.batch_collect_evidence",
         new_callable=AsyncMock,
         return_value=({cid: evidence_run.evidence}, [evidence_run]),
+    ), patch(
+        "app.graph.workflow.open_workflow",
+        new=open_test_workflow,
     ):
         with patch("app.agents.match_agent.call_llm_structured") as mock_match:
             mock_match.return_value = MatchResult(
@@ -388,10 +411,13 @@ def test_full_pipeline_smoke(client):
             )
             with patch("app.agents.ranking_agent.call_llm") as mock_rank:
                 mock_rank.return_value = "排名合理, 张三排第一"
-                r3 = client.post(f"/jobs/{jid}/match", params={"limit": 5})
+                r3 = client.post(
+                    "/workflow/run",
+                    json={"job_id": jid, "limit": 5},
+                )
                 assert r3.status_code == 200
                 data3 = r3.json()
-                assert data3["status"] == "completed"
+                assert data3["status"] == "pending_review"
                 assert data3["llm_scored"] >= 1
                 assert len(data3["ranking"]["ranked_candidates"]) >= 1
                 assert data3["agent_runs"][0]["tool_calls"][0]["attempts"] == 1
