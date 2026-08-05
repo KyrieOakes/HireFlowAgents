@@ -183,6 +183,21 @@ export type AgentInterventionAction =
 /** 调用匹配接口时发送给后端的错误处理策略。 */
 export type AgentFailureAction = "ask_user" | "continue_with_warning" | "skip_failed";
 
+/** LangGraph 可以停在证据审核或最终排名审核，也可以正常完成或失败。 */
+export type WorkflowStatus =
+  | "evidence_agent_needs_review"
+  | "pending_review"
+  | "completed"
+  | "failed"
+  | "not_found";
+
+/** 恢复 LangGraph 时允许提交的全部人工动作。 */
+export type WorkflowResumeAction =
+  | AgentInterventionAction
+  | "approve_shortlist"
+  | "reject"
+  | "modify";
+
 /** 匹配接口统一返回结果，暂停和完成都使用同一个结构。 */
 export interface MatchingRunResponse {
   status: "completed" | "needs_human_review";
@@ -199,6 +214,29 @@ export interface MatchingRunResponse {
   match_results: MatchResult[];
   agent_runs: EvidenceAgentRun[];
   interventions: EvidenceIntervention[];
+}
+
+/** LangGraph 启动、恢复和状态查询共用的响应结构。 */
+export interface WorkflowResponse {
+  status: WorkflowStatus;
+  message: string;
+  thread_id: string;
+  job_id?: string;
+  limit?: number;
+  total_in_db?: number;
+  prescreened?: number;
+  llm_scored?: number;
+  ranking?: {
+    ranked_candidates?: RankedCandidate[];
+    shortlist?: string[];
+  };
+  match_results?: MatchResult[];
+  agent_runs?: EvidenceAgentRun[];
+  interventions?: EvidenceIntervention[];
+  selected_candidate_ids?: string[];
+  human_review_status?: string;
+  errors?: string[];
+  next_steps?: string[];
 }
 
 /** 排序结果 */

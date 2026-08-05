@@ -15,6 +15,8 @@ import type {
   EmailDraft,
   AgentFailureAction,
   MatchingRunResponse,
+  WorkflowResponse,
+  WorkflowResumeAction,
 } from "@/types";
 
 // --- 配置 ---
@@ -149,6 +151,39 @@ export async function runMatching(
   if (limit > 0) params.set("limit", String(limit));
   params.set("agent_failure_action", agentFailureAction);
   return request(`/jobs/${jobId}/match?${params.toString()}`, { method: "POST" });
+}
+
+/** 启动 LangGraph 主匹配流程，并运行到证据审核或最终排名审核中断点。 */
+export async function startMatchingWorkflow(
+  jobId: string,
+  limit: number = 0,
+): Promise<WorkflowResponse> {
+  return request("/workflow/run", {
+    method: "POST",
+    body: JSON.stringify({ job_id: jobId, limit }),
+  });
+}
+
+/** 提交人工决定，让 LangGraph 从 PostgreSQL checkpoint 恢复执行。 */
+export async function resumeMatchingWorkflow(
+  threadId: string,
+  action: WorkflowResumeAction,
+  selectedCandidateIds: string[] = [],
+  comment: string = "",
+): Promise<WorkflowResponse> {
+  return request(`/workflow/${threadId}/resume`, {
+    method: "POST",
+    body: JSON.stringify({
+      action,
+      selected_candidate_ids: selectedCandidateIds,
+      comment,
+    }),
+  });
+}
+
+/** 读取持久化工作流，页面刷新后仍可恢复审核现场。 */
+export async function getMatchingWorkflowState(threadId: string): Promise<WorkflowResponse> {
+  return request(`/workflow/${threadId}/state`);
 }
 
 /** 获取排名结果 (limit=0 返回全部) */

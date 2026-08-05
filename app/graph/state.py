@@ -29,6 +29,12 @@ class HiringState(TypedDict):
     jd_text: str
     # jd_profile: JD Agent 解析后的结构化岗位信息 (JSON 字典)
     jd_profile: Dict[str, Any]
+    # requested_limit: 用户要求最终精排的人数，0 表示全部候选人
+    requested_limit: int
+    # total_candidates: 数据库中已经解析完成的候选人总数
+    total_candidates: int
+    # prescreened_count: 关键词粗筛阶段进入候选池的人数
+    prescreened_count: int
 
     # ---- 简历相关 ----
     # resume_texts: 上传的简历文本列表, 每个元素包含 candidate_id, text, filename
@@ -52,8 +58,8 @@ class HiringState(TypedDict):
     # ---- 匹配和排序 ----
     # match_results: Match Agent 对每个候选人的评分结果列表
     match_results: List[Dict[str, Any]]
-    # ranking_results: Ranking Agent 排序后的候选人列表
-    ranking_results: List[Dict[str, Any]]
+    # ranking_results: Ranking Agent 的完整结果，包含 ranked_candidates 和 shortlist
+    ranking_results: Dict[str, Any]
 
     # ---- 面试相关 ----
     # selected_candidate_ids: 人工审核后选中的候选人 ID 列表

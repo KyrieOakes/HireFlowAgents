@@ -4,7 +4,6 @@
 
 import { useEffect, useState, useRef } from "react";
 import type {
-  AgentFailureAction,
   AgentInterventionAction,
   Candidate,
   EmailDraft,
@@ -15,12 +14,15 @@ import type {
   Job,
   MatchDetail,
   RankedCandidate,
+  WorkflowResponse,
+  WorkflowStatus,
 } from "@/types";
 import {
   listJobs,
   listCandidates,
-  runMatching,
-  getRanking,
+  startMatchingWorkflow,
+  resumeMatchingWorkflow,
+  getMatchingWorkflowState,
   getMatchDetail,
   generateInterviewQuestions,
   submitInterviewEvaluation,
@@ -63,6 +65,12 @@ export default function MatchingPage() {
   const [agentRuns, setAgentRuns] = useState<EvidenceAgentRun[]>([]);
   const [agentInterventions, setAgentInterventions] = useState<EvidenceIntervention[]>([]);
   const [agentMessage, setAgentMessage] = useState("");
+  // LangGraph thread_id 是 PostgreSQL checkpoint 的恢复钥匙，页面刷新后也会复用。
+  const [workflowThreadId, setWorkflowThreadId] = useState("");
+  const [workflowStatus, setWorkflowStatus] = useState<WorkflowStatus | "">("");
+  // 最终人工审核允许 HR 勾选真正进入面试的候选人。
+  const [reviewCandidateIds, setReviewCandidateIds] = useState<string[]>([]);
+  const [defaultShortlistIds, setDefaultShortlistIds] = useState<string[]>([]);
 
   // candidate_id → name 映射表 (用于显示姓名而非ID)
   const nameMap: Record<string, string> = {};
@@ -83,31 +91,100 @@ export default function MatchingPage() {
     })();
   }, []);
 
-  // 执行匹配 (防抖锁 + 耗时计时器)
-  async function handleMatch(agentFailureAction: AgentFailureAction = "ask_user") {
-    if (!selectedJobId || matchLock.current) return;
+  // 用户切换岗位时，尝试从浏览器保存的 thread_id 恢复 PostgreSQL checkpoint。
+  useEffect(() => {
+    if (!selectedJobId) return;
+    const savedThreadId = window.localStorage.getItem(`hireflow-workflow:${selectedJobId}`);
+    if (!savedThreadId) return;
+
+    let cancelled = false;
+    (async () => {
+      setMatching(true);
+      try {
+        const response = await getMatchingWorkflowState(savedThreadId);
+        if (cancelled) return;
+        if (response.status === "not_found") {
+          window.localStorage.removeItem(`hireflow-workflow:${selectedJobId}`);
+          return;
+        }
+        applyWorkflowResponse(response);
+      } catch {
+        // 恢复失败不阻止用户重新点击“开始匹配”；后端错误会在新运行时正常显示。
+      } finally {
+        if (!cancelled) setMatching(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedJobId]);
+
+  /** 把启动、恢复、状态查询的统一响应同步到页面。 */
+  function applyWorkflowResponse(response: WorkflowResponse) {
+    setWorkflowThreadId(response.thread_id || "");
+    setWorkflowStatus(response.status);
+    setAgentRuns(response.agent_runs || []);
+    setAgentInterventions(response.interventions || []);
+    setAgentMessage(response.message || "");
+
+    const ranking = response.ranking;
+    if (ranking?.ranked_candidates) {
+      setRanked(ranking.ranked_candidates);
+      const shortlist = ranking.shortlist || [];
+      setDefaultShortlistIds(shortlist);
+      setReviewCandidateIds(
+        response.selected_candidate_ids?.length
+          ? response.selected_candidate_ids
+          : shortlist,
+      );
+      setSelectedCandidateId(
+        response.selected_candidate_ids?.[0]
+          || ranking.ranked_candidates[0]?.candidate_id
+          || "",
+      );
+    }
+
+    if (response.errors?.length) {
+      setError(response.errors.join("；"));
+    }
+  }
+
+  /** 开始一次耗时的 LangGraph 请求，并启动页面计时器。 */
+  function beginWorkflowRequest() {
     matchLock.current = true;
     setMatching(true);
     setError(null);
-    setRanked([]);
-    setAgentInterventions([]);
     setElapsed(0);
-    // 启动计时器: 每秒 +1, 让用户看到等待进度
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+  }
+
+  /** 结束 LangGraph 请求，释放防重复点击锁。 */
+  function finishWorkflowRequest() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    matchLock.current = false;
+    setMatching(false);
+  }
+
+  // 执行匹配：现在正式从 /workflow/run 进入 LangGraph，而不是直连 /jobs/{id}/match。
+  async function handleMatch() {
+    if (!selectedJobId || matchLock.current) return;
+    beginWorkflowRequest();
+    setRanked([]);
+    setAgentRuns([]);
+    setAgentInterventions([]);
+    setWorkflowStatus("");
+    setWorkflowThreadId("");
+    setReviewCandidateIds([]);
+    setDefaultShortlistIds([]);
     try {
-      const res = await runMatching(selectedJobId, limit, agentFailureAction);
-      setAgentRuns(res.agent_runs || []);
-      setAgentInterventions(res.interventions || []);
-      setAgentMessage(res.message || "");
-
-      // 技术错误自动重试耗尽后，先展示人工选项，不调用不存在的排名结果。
-      if (res.status === "needs_human_review") {
-        return;
-      }
-
-      const rankRes = await getRanking(selectedJobId, limit);
-      setRanked(rankRes.ranked_candidates);
-      setSelectedCandidateId(rankRes.ranked_candidates[0]?.candidate_id || "");
+      const response = await startMatchingWorkflow(selectedJobId, limit);
+      applyWorkflowResponse(response);
+      // 保存 thread_id 后，即使刷新页面也可以通过 GET /workflow/{id}/state 恢复。
+      window.localStorage.setItem(`hireflow-workflow:${selectedJobId}`, response.thread_id);
       setQuestions([]);
       setEvaluation(null);
       setDrafts([]);
@@ -115,27 +192,49 @@ export default function MatchingPage() {
     } catch (e: any) {
       setError(e.message);
     } finally {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-      matchLock.current = false;
-      setMatching(false);
+      finishWorkflowRequest();
     }
   }
 
-  /** 把前端按钮选择转换成后端的匹配失败策略。 */
-  async function handleAgentResolution(action: AgentInterventionAction) {
-    if (action === "abort") {
-      setAgentInterventions([]);
-      setAgentMessage("本轮匹配已由用户终止；已有 Agent 轨迹保留用于排查。");
-      return;
+  /** 从当前 interrupt 恢复工作流；证据处理和最终排名审核都复用此函数。 */
+  async function continueWorkflow(
+    action: AgentInterventionAction | "approve_shortlist" | "reject" | "modify",
+    selectedIds: string[] = [],
+  ) {
+    if (!workflowThreadId || matchLock.current) return;
+    beginWorkflowRequest();
+    try {
+      const response = await resumeMatchingWorkflow(workflowThreadId, action, selectedIds);
+      applyWorkflowResponse(response);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      finishWorkflowRequest();
     }
+  }
 
-    const failureAction: AgentFailureAction =
-      action === "continue_with_warning"
-        ? "continue_with_warning"
-        : action === "skip_failed"
-        ? "skip_failed"
-        : "ask_user";
-    await handleMatch(failureAction);
+  /** Evidence Agent 失败后，把按钮选择交给同一个 LangGraph checkpoint。 */
+  async function handleAgentResolution(action: AgentInterventionAction) {
+    await continueWorkflow(action);
+  }
+
+  /** 人工确认默认 shortlist；手动改动过名单时使用 modify 动作。 */
+  async function handleApproveRanking() {
+    const current = [...reviewCandidateIds].sort().join(",");
+    const original = [...defaultShortlistIds].sort().join(",");
+    await continueWorkflow(
+      current === original ? "approve_shortlist" : "modify",
+      reviewCandidateIds,
+    );
+  }
+
+  /** 勾选或取消一名候选人进入最终面试名单。 */
+  function toggleReviewCandidate(candidateId: string) {
+    setReviewCandidateIds((current) =>
+      current.includes(candidateId)
+        ? current.filter((id) => id !== candidateId)
+        : [...current, candidateId],
+    );
   }
 
   async function withStageLoading(key: string, action: () => Promise<void>) {
@@ -286,6 +385,48 @@ export default function MatchingPage() {
         onResolve={handleAgentResolution}
       />
 
+      {/* ---- LangGraph 最终排名人工审核 ---- */}
+      {workflowStatus === "pending_review" && ranked.length > 0 && (
+        <section className="glass-pad border-amber-200 bg-amber-50/70">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <p className="section-label text-amber-700">Human-in-the-loop</p>
+              <h2 className="mt-2 text-lg font-semibold text-slate-950">确认进入面试的候选人</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                LangGraph 已在 Ranking Agent 后暂停。请在排名卡片中勾选名单，再由人工确认继续。
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                当前选择 {reviewCandidateIds.length} 人 · Thread {workflowThreadId.slice(0, 28)}…
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={matching}
+                onClick={() => continueWorkflow("reject")}
+                className="rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+              >
+                驳回并重新评分
+              </button>
+              <button
+                type="button"
+                disabled={matching || reviewCandidateIds.length === 0}
+                onClick={handleApproveRanking}
+                className="rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                确认面试名单
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {workflowStatus === "completed" && ranked.length > 0 && (
+        <section className="rounded-lg border border-emerald-200 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-800">
+          人工审核已完成，LangGraph 工作流已经结束。现在可以对已确认候选人开展面试跟进。
+        </section>
+      )}
+
       {/* ---- 排序结果 ---- */}
       {!matching && ranked.length === 0 && agentInterventions.length === 0 ? (
         <EmptyState title="还没有排名结果" description="选择一个岗位后点击「开始匹配」" />
@@ -293,7 +434,7 @@ export default function MatchingPage() {
         <>
           <div className="mb-3 flex items-center justify-between">
             <h2 className="section-label">排名结果</h2>
-            <span className="text-xs text-slate-400">点击候选人后可进入面试跟进</span>
+            <span className="text-xs text-slate-400">人工确认后，仅入选候选人可以进入面试跟进</span>
           </div>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
             <div className="space-y-4">
@@ -318,6 +459,20 @@ export default function MatchingPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
+                    {workflowStatus === "pending_review" && (
+                      <label
+                        className="flex items-center gap-2 text-xs font-medium text-slate-600"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={reviewCandidateIds.includes(c.candidate_id)}
+                          onChange={() => toggleReviewCandidate(c.candidate_id)}
+                          className="h-4 w-4 rounded border-slate-300 text-slate-950"
+                        />
+                        进入面试
+                      </label>
+                    )}
                     <span className="text-lg font-bold text-slate-900">{c.total_score}<span className="text-sm font-normal text-slate-400">/100</span></span>
                     <StatusBadge level={c.recommendation} />
                   </div>
@@ -365,22 +520,33 @@ export default function MatchingPage() {
               </div>
             ))}
             </div>
-            <InterviewPanel
-              candidateId={selectedCandidateId}
-              candidateName={nameMap[selectedCandidateId] || selectedCandidateId}
-              questions={questions}
-              evaluation={evaluation}
-              drafts={drafts}
-              feedback={feedback}
-              emailType={emailType}
-              loading={stageLoading}
-              onFeedbackChange={setFeedback}
-              onEmailTypeChange={setEmailType}
-              onGenerateQuestions={handleGenerateQuestions}
-              onSubmitEvaluation={handleSubmitEvaluation}
-              onCreateDraft={handleCreateDraft}
-              onApproveDraft={handleApproveDraft}
-            />
+            {workflowStatus === "completed" && reviewCandidateIds.includes(selectedCandidateId) ? (
+              <InterviewPanel
+                candidateId={selectedCandidateId}
+                candidateName={nameMap[selectedCandidateId] || selectedCandidateId}
+                questions={questions}
+                evaluation={evaluation}
+                drafts={drafts}
+                feedback={feedback}
+                emailType={emailType}
+                loading={stageLoading}
+                onFeedbackChange={setFeedback}
+                onEmailTypeChange={setEmailType}
+                onGenerateQuestions={handleGenerateQuestions}
+                onSubmitEvaluation={handleSubmitEvaluation}
+                onCreateDraft={handleCreateDraft}
+                onApproveDraft={handleApproveDraft}
+              />
+            ) : (
+              <aside className="focus-card h-fit p-5 text-sm text-slate-500">
+                <p className="font-semibold text-slate-900">面试流程尚未解锁</p>
+                <p className="mt-2 leading-6">
+                  {workflowStatus === "completed"
+                    ? "当前候选人不在人工确认的面试名单中，请选择一名已入选候选人。"
+                    : "请先完成人工排名审核。系统不会在 HR 确认前自动推进招聘决定。"}
+                </p>
+              </aside>
+            )}
           </div>
         </>
       )}

@@ -69,11 +69,13 @@ export default function AgentTracePanel({
   const completed = runs.filter((run) => run.status === "completed").length;
   const insufficient = runs.filter((run) => run.status === "insufficient_evidence").length;
   const needsReview = runs.filter((run) => run.status === "needs_human_review").length;
+  // 运行轨迹会永久保留 needs_human_review 状态用于审计；只有 interventions 非空才代表现在仍需操作。
+  const requiresAction = interventions.length > 0;
 
   return (
     <>
       {/* 页面只保留紧凑入口，完整轨迹点击后在大弹窗中查看。 */}
-      <section className={`glass-pad ${needsReview > 0 ? "border-rose-200" : ""}`}>
+      <section className={`glass-pad ${requiresAction ? "border-rose-200" : ""}`}>
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="section-label">Bounded ReAct Agent</p>
@@ -86,12 +88,12 @@ export default function AgentTracePanel({
             type="button"
             onClick={() => setOpen(true)}
             className={`rounded-md px-4 py-2 text-sm font-medium transition ${
-              needsReview > 0
+              requiresAction
                 ? "bg-rose-700 text-white hover:bg-rose-800"
                 : "bg-slate-950 text-white hover:bg-slate-800"
             }`}
           >
-            {needsReview > 0 ? "查看并处理" : "查看执行轨迹"}
+            {requiresAction ? "查看并处理" : "查看执行轨迹"}
           </button>
         </div>
       </section>

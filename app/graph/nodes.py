@@ -33,6 +33,11 @@ async def jd_agent_node(state: HiringState) -> Dict[str, Any]:
     调用 JD Agent 解析为结构化数据，
     结果写回 state.jd_profile。
     """
+    # 主流程会优先把数据库中已经解析好的 JD 画像放入 state。
+    # 有现成画像时直接复用，可以避免用户每次匹配都再次调用 LLM。
+    if state.get("jd_profile"):
+        return {}
+
     jd_text = state.get("jd_text", "")
 
     if not jd_text:
@@ -62,6 +67,11 @@ async def resume_agent_node(state: HiringState) -> Dict[str, Any]:
     state 中的 resume_texts 格式:
       [{"candidate_id": "xxx", "text": "简历全文...", "filename": "xxx.pdf"}, ...]
     """
+    # 与 JD 节点相同，数据库里已有结构化候选人画像时直接复用。
+    # 只有旧的“传入原始简历文本”调用方式才需要在工作流里重新解析。
+    if state.get("candidate_profiles"):
+        return {}
+
     resume_texts = state.get("resume_texts", [])
 
     if not resume_texts:
@@ -337,10 +347,11 @@ async def human_review_node(state: HiringState) -> Dict[str, Any]:
             "selected_candidate_ids": human_decision.get("selected_candidate_ids", shortlist),
         }
     else:  # reject
+        # “驳回并重新评分”是正常的人工作流动作，不是系统错误。
+        # 如果写入 errors，后续即使审核通过，页面仍会误报旧错误。
         return {
             "human_review_status": "rejected",
             "selected_candidate_ids": [],
-            "errors": state.get("errors", []) + ["人工审核驳回: 需要重新匹配"],
         }
 
 

@@ -5,10 +5,10 @@ LangGraph 工作流定义 (PostgresSaver 持久化)。
 
 使用 StateGraph 将多个 Agent 节点连接成完整的招聘流程。
 
-架构说明 (当前阶段):
-  - FastAPI 路由直接调用 agent/service (性能优先, 跳过 LangGraph 开销)
-  - workflow 是规划的正式入口, 提供 Human-in-the-loop + 断点恢复能力
-  - 后续 Phase 会将主流程迁移到 workflow, 当前保留作为架构骨架
+架构说明:
+  - 前端主匹配流程通过 workflow API 进入本状态图
+  - 已经解析并保存到数据库的 JD/简历画像会直接复用，避免重复调用 LLM
+  - Human-in-the-loop 中断点由 PostgreSQL checkpoint 持久化
 
 PostgresSaver 是 LangGraph 官方推荐的生产级 Checkpointer:
 - 工作流状态持久化到 PostgreSQL
@@ -21,36 +21,42 @@ PostgresSaver 是 LangGraph 官方推荐的生产级 Checkpointer:
 - 条件边 (Conditional Edge): 根据状态决定下一步走哪条路径
 """
 
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
+
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.postgres import PostgresSaver
 from app.graph.state import HiringState
 from app.graph import nodes
 from app.utils.config import settings
 
 
-def build_checkpointer() -> PostgresSaver:
+@asynccontextmanager
+async def open_workflow() -> AsyncIterator[Any]:
     """
-    创建 PostgresSaver 实例。
+    打开一个带 PostgreSQL 持久化能力的已编译工作流。
 
-    PostgresSaver 使用 PostgreSQL 存储工作流的 checkpoint。
-    每次节点执行后，状态自动保存到数据库。
-    如果流程被中断 (如 Human Review 节点)，下次可以从中断点恢复。
+    为什么使用异步上下文管理器:
+    - API 使用 ``workflow.ainvoke()``，因此 checkpointer 也必须是异步版本。
+    - ``from_conn_string()`` 返回上下文管理器，必须在 ``async with`` 内使用。
+    - 请求结束时自动关闭数据库连接，但 checkpoint 数据仍永久保存在 PostgreSQL。
 
-    返回:
-        PostgresSaver: 配置好的 checkpointer 实例
+    输出:
+        AsyncIterator[Any]: 在上下文中可安全调用的 LangGraph 编译结果。
     """
-    # 从配置中读取数据库连接 URL
-    # PostgresSaver 需要自己的数据库连接来管理 checkpoint 表
-    checkpointer = PostgresSaver.from_conn_string(settings.database.url)
+    # 延迟导入可以让普通 CRUD API 在 checkpoint 驱动尚未安装时仍能启动，
+    # 真正调用工作流时则会给出明确的依赖错误。
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-    # 首次使用时自动创建 checkpoint 相关表
-    # setup() 会建两张表: checkpoints 和 checkpoint_writes
-    checkpointer.setup()
+    # AsyncPostgresSaver 会为本次 API 调用打开一条异步 PostgreSQL 连接。
+    async with AsyncPostgresSaver.from_conn_string(settings.database.url) as checkpointer:
+        # setup() 是幂等操作：首次创建表，后续调用只检查迁移版本。
+        await checkpointer.setup()
 
-    return checkpointer
+        # 连接保持打开期间编译并交出工作流，保证 ainvoke/aget_state 可正常读写。
+        yield build_workflow(checkpointer)
 
 
-def build_workflow() -> StateGraph:
+def build_workflow(checkpointer: Any) -> Any:
     """
     构建完整的招聘筛选工作流。
 
@@ -59,7 +65,11 @@ def build_workflow() -> StateGraph:
            -> Human Review -> END
 
     返回:
-        StateGraph: 编译后的 LangGraph 工作流对象
+        checkpointer: LangGraph checkpoint 保存器；生产环境传入 AsyncPostgresSaver，
+            测试环境可以传入 InMemorySaver。
+
+    返回:
+        Any: 编译后的 LangGraph 工作流对象。
     """
     # 创建 StateGraph，指定 HiringState 作为共享状态类型
     workflow = StateGraph(HiringState)
@@ -141,9 +151,7 @@ def build_workflow() -> StateGraph:
     )
 
     # ---- 编译工作流 ----
-    # 注入 PostgresSaver 作为 checkpointer
-    # 这样工作流的每个步骤都会自动保存到 PostgreSQL
-    checkpointer = build_checkpointer()
+    # 注入调用方提供的 checkpointer，使生产环境和测试环境可以使用不同持久化实现。
     return workflow.compile(checkpointer=checkpointer)
 
 

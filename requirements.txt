@@ -8,6 +8,7 @@
 # --- LangGraph 工作流框架 ---
 langgraph>=1.2.0                  # StateGraph、Tool Calling 子图、interrupt 与重试能力
 langgraph-checkpoint-postgres>=3.1.0  # PostgresSaver: 工作流状态持久化
+psycopg[binary,pool]>=3.2         # LangGraph PostgreSQL checkpoint 使用的异步 psycopg 3 驱动
 langchain>=1.3.0                  # ReAct Tool Schema、消息模型与 Agent 基础组件
 langchain-openai>=1.2.0           # OpenAI 兼容 LLM/Embedding 与 bind_tools
 langchain-community>=0.3.0        # 社区扩展 (Document Loaders 等)
