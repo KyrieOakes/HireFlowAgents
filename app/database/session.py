@@ -32,7 +32,7 @@ engine = create_engine(
 )
 
 # ---- 会话工厂 ----
-# sessionmaker 是干啥的：专门用来批量生产 Session（会话）对象的
+# sessionmaker ：专门用来批量生产 Session（会话）对象的
 # autocommit=False：“不要自动提交” - 我们在写简历或职位数据时，必须手动执行 db.commit()，数据库才会真正保存。这可以防止写到一半出错时，脏数据被意外存入
 # autoflush=False：“不要自动刷新”。不让它每次改一点点数据就 频繁去同步数据库，等我们说同步时再同步，提高效率
 # bind=engine：把这个水龙头工厂和上面那条输水管线（engine）绑在一起
