@@ -205,6 +205,7 @@ export interface WorkflowResponse {
   total_in_db?: number;
   prescreened?: number;
   llm_scored?: number;
+  returned?: number;
   ranking?: {
     ranked_candidates?: RankedCandidate[];
     shortlist?: string[];

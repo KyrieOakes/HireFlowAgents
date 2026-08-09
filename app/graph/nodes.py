@@ -269,18 +269,20 @@ async def match_agent_node(state: HiringState) -> Dict[str, Any]:
 
 async def ranking_agent_node(state: HiringState) -> Dict[str, Any]:
     """
-    对所有候选人进行排序。
+    对召回池中的所有候选人进行排序，并在精排完成后截取 Top-N。
 
     按总分从高到低排列，分配推荐等级，生成 shortlist。
     结果写回 state.ranking_results。
     """
     match_results = state.get("match_results", [])
+    requested_limit = state.get("requested_limit", 0)
 
     if not match_results:
         return {"errors": ["没有匹配结果，无法排序"]}
 
-    # 调用 Ranking Agent
-    ranking = await rank_candidates(match_results)
+    # Match Agent 已经对整个粗排召回池完成 LLM 评分。
+    # Top-N 必须在这些分数全部产生后再截取，才能构成真正的“召回 + 精排”。
+    ranking = await rank_candidates(match_results, limit=requested_limit)
 
     return {"ranking_results": ranking}
 

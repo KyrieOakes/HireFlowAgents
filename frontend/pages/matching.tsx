@@ -71,6 +71,8 @@ export default function MatchingPage() {
   // 最终人工审核允许 HR 勾选真正进入面试的候选人。
   const [reviewCandidateIds, setReviewCandidateIds] = useState<string[]>([]);
   const [defaultShortlistIds, setDefaultShortlistIds] = useState<string[]>([]);
+  // 三个数字分别展示粗排召回、LLM 精排和最终返回人数，方便验证两阶段排序真实发生。
+  const [pipelineStats, setPipelineStats] = useState({ prescreened: 0, llmScored: 0, returned: 0 });
 
   // candidate_id → name 映射表 (用于显示姓名而非ID)
   const nameMap: Record<string, string> = {};
@@ -132,6 +134,11 @@ export default function MatchingPage() {
     setAgentRuns(response.agent_runs || []);
     setAgentInterventions(response.interventions || []);
     setAgentMessage(response.message || "");
+    setPipelineStats({
+      prescreened: response.prescreened || 0,
+      llmScored: response.llm_scored || 0,
+      returned: response.returned || response.ranking?.ranked_candidates?.length || 0,
+    });
 
     const ranking = response.ranking;
     if (ranking?.ranked_candidates) {
@@ -185,6 +192,7 @@ export default function MatchingPage() {
     setWorkflowThreadId("");
     setReviewCandidateIds([]);
     setDefaultShortlistIds([]);
+    setPipelineStats({ prescreened: 0, llmScored: 0, returned: 0 });
     try {
       const response = await startMatchingWorkflow(selectedJobId, limit);
       applyWorkflowResponse(response);
@@ -326,7 +334,9 @@ export default function MatchingPage() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-slate-900">执行匹配</h2>
-            <p className="mt-1 text-sm text-slate-500">粗筛后先运行 Evidence ReAct Agent，再调用 Match Agent 和 Ranking Agent。</p>
+            <p className="mt-1 text-sm text-slate-500">
+              关键词召回候选池后，整池运行 Evidence 与 Match 精排，最后由 Ranking 返回 Top N。
+            </p>
           </div>
         </div>
         <div className="flex flex-wrap items-end gap-3">
@@ -373,6 +383,13 @@ export default function MatchingPage() {
               </span>
             </div>
             <p className="mt-2 text-xs text-sky-500">已等待 {elapsed} 秒 | 本地模型处理中, 请耐心等候</p>
+          </div>
+        )}
+        {!matching && pipelineStats.prescreened > 0 && (
+          <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600">
+            <span className="rounded-full bg-slate-100 px-3 py-1.5">关键词召回 {pipelineStats.prescreened} 人</span>
+            <span className="rounded-full bg-sky-100 px-3 py-1.5 text-sky-700">证据 + LLM 精排 {pipelineStats.llmScored} 人</span>
+            <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-emerald-700">最终返回 {pipelineStats.returned} 人</span>
           </div>
         )}
         {jobs.filter((j) => (j.has_profile || j.jd_profile)).length === 0 && (

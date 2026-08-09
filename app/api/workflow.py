@@ -99,7 +99,9 @@ async def _prepare_initial_state(
         all_profiles.append(profile)
         records_by_id[candidate.candidate_id] = candidate
 
-    # 保持既有筛选语义：先扩大关键词粗筛池，再取用户要求的 Top-N 进入精排。
+    # 关键词阶段只负责低成本召回，不在这里提前截成用户要求的 Top-N。
+    # 例如用户选择 Top 5 时，先召回 max(5 * 3, 15) = 15 人；这 15 人都要进入
+    # Evidence Agent 和 Match Agent，最后由 Ranking Agent 根据模型评分截取 Top 5。
     pool_size = (
         max(request.limit * 3, 15)
         if request.limit > 0
@@ -111,14 +113,10 @@ async def _prepare_initial_state(
         candidates=all_profiles,
         top_k=pool_size,
     )
-    selected_profiles = (
-        prescreened_profiles[:request.limit]
-        if request.limit > 0
-        else prescreened_profiles
-    )
 
-    # Evidence Agent 依赖 Qdrant；缺失索引时沿用原匹配 API 的自动重建逻辑。
-    await ensure_candidate_indexes(selected_profiles, records_by_id, db)
+    # Evidence Agent 会处理整个召回池，因此这里也必须检查整个召回池的 Qdrant 索引。
+    # 如果只检查最终 Top-N，就会再次退化成“关键词先决定结果、模型只做补充说明”。
+    await ensure_candidate_indexes(prescreened_profiles, records_by_id, db)
 
     # Match Agent 从 jd_profile.rubric 读取评分规则，因此把数据库独立列合并进状态副本。
     jd_profile = dict(job.jd_profile_json)
@@ -134,7 +132,8 @@ async def _prepare_initial_state(
         "prescreened_count": len(prescreened_profiles),
         # 已有结构化画像，Resume Agent 节点会识别并跳过重复解析。
         "resume_texts": [],
-        "candidate_profiles": selected_profiles,
+        # 整个关键词召回池进入 LangGraph，真正参与证据检索和 LLM 多维评分。
+        "candidate_profiles": prescreened_profiles,
         "resume_chunks": [],
         "retrieved_evidence": {},
         "evidence_agent_runs": [],
@@ -264,6 +263,8 @@ def _build_workflow_response(
         "failed": "工作流已结束，请根据错误信息处理后重新运行",
     }
 
+    ranking = _ranking_for_frontend(values)
+
     return {
         "status": status,
         "message": str(payload.get("message") or messages[status]),
@@ -273,7 +274,8 @@ def _build_workflow_response(
         "total_in_db": values.get("total_candidates", 0),
         "prescreened": values.get("prescreened_count", 0),
         "llm_scored": len(values.get("match_results", [])),
-        "ranking": _ranking_for_frontend(values),
+        "returned": len(ranking.get("ranked_candidates", [])),
+        "ranking": ranking,
         "match_results": values.get("match_results", []),
         "agent_runs": values.get("evidence_agent_runs", []),
         # 处理完成后不再把旧干预项渲染成可点击按钮；完整失败轨迹仍保留在 agent_runs。

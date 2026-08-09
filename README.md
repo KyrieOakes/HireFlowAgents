@@ -16,7 +16,7 @@ HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → LangGraph 粗
 - 原生 Tool Calling: Qdrant 证据搜索 + 证据覆盖率检查，全轨迹可审计
 - 分层容错: 临时错误指数退避、非法参数由 Agent 修正、安全错误立即阻断
 - Agent 人工兜底: 重试 / 带警告继续 / 跳过失败候选人 / 终止本轮
-- 两阶段排序: 关键词粗筛 + LLM 精排 (ThreadPool 并行)
+- 两阶段排序: 关键词召回 `max(3N, 15)` 人，整池完成证据检索与 LLM 评分后再返回 Top N
 - RAG 证据检索 (简历向量化 + Qdrant 语义搜索)
 - LangGraph 单一匹配入口: `/workflow/run`，不保留旧的直连 Agent 编排路由
 - 双层 Human-in-the-loop: `interrupt()` + `Command(resume=...)`
@@ -25,7 +25,7 @@ HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → LangGraph 粗
 - PDF/DOCX 文件上传 + 自动解析 + 自动命名
 - 前端产品化体验: 毛玻璃工作台、岗位/候选人内联改名、Portal 详情弹窗、局部 loading、连续解析
 - LLM 稳定性兜底: 简历语义错位修复、匹配输出截断兜底评分
-- 80 个测试 (0 failures)，覆盖 interrupt/resume、reject 循环和旧路由删除
+- 82 个测试 (0 failures)，覆盖两阶段精排、interrupt/resume、reject 循环和旧路由删除
 - Next.js 前端 (HR/ATS 工作台风格)
 
 ## 快速开始
@@ -79,7 +79,7 @@ python run_eval.py                          # 自动化脚本
 ### 7. 测试
 
 ```bash
-pytest tests/                               # 80 tests
+pytest tests/                               # 82 tests
 pytest tests/ -v                            # 详细
 ```
 
@@ -107,9 +107,9 @@ HireFlow 没有让一个 Supervisor Agent 自由控制整个招聘过程。岗�
 /workflow/run
       |
       v
-读取 PostgreSQL 已解析 JD/候选人 --> 关键词粗筛 --> 构建 initial state
-                                                        |
-                                                        v
+读取 PostgreSQL 已解析 JD/候选人 --> 关键词召回池 max(3N, 15) --> 构建 initial state
+                                                                   |
+                                                                   v
 JD Agent(复用画像) --> Resume Agent(复用画像) --> Resume Validation
                                   |
                                   v
@@ -123,9 +123,11 @@ JD Agent(复用画像) --> Resume Agent(复用画像) --> Resume Validation
                     |成功         |证据不足         |技术失败
                     v             v                v
                 Match Agent   标记人工复核    Evidence Intervention
+             (召回池全部评分)                         |
                     |                              |
                     v                    重试/继续/跳过/终止
                 Ranking Agent                       |
+              (排序后截取 Top N)                    |
                     |-------------------------------|
                     v
                 Human Review -- interrupt() --> 人工勾选名单
@@ -139,6 +141,12 @@ JD Agent(复用画像) --> Resume Agent(复用画像) --> Resume Validation
 每次启动都会生成唯一 `thread_id`。`AsyncPostgresSaver` 在节点执行后保存 checkpoint；
 前端保存 thread ID，可通过状态接口恢复证据审核或排名审核现场。审核完成后，页面只
 展示最终入选候选人，未入选者不会解锁面试操作。
+
+两阶段排序中的 `N` 是 HR 选择的最终返回人数。例如选择 Top 5 时，关键词规则先从
+全部已解析候选人中召回 `max(5 × 3, 15) = 15` 人；这 15 人全部经过 Evidence ReAct
+证据检索和 Match Agent 七维 LLM 评分，Ranking Agent 再按总分稳定排序并截取前 5。
+因此关键词只决定“谁进入成本更高的精排池”，不会提前决定最终 Top 5。若数据库中
+不足 15 人，则召回全部候选人；选择“全部”时不执行最终截断。
 
 ### Tool Calling 与重试边界
 
@@ -210,7 +218,7 @@ JD Agent(复用画像) --> Resume Agent(复用画像) --> Resume Validation
 | 数据库 | PostgreSQL 16 (业务数据 + LangGraph checkpoint) |
 | 向量库 | Qdrant |
 | 前端 | Next.js 14 + TypeScript + Tailwind CSS |
-| 测试 | pytest (80 tests), SQLite/InMemorySaver, FastAPI TestClient |
+| 测试 | pytest (82 tests), SQLite/InMemorySaver, FastAPI TestClient |
 | 配置 | Pydantic Settings + .env |
 | 部署 | Docker Compose |
 
@@ -230,7 +238,7 @@ HireFlowAgents/
 │   └── utils/                # config + logger
 ├── frontend/                 # Next.js (4 页面)
 ├── evaluation/               # Notebook + 评估脚本 + reports
-├── tests/                    # 80 tests (Agent/HITL/Tool重试/安全/RAG/CRUD/API/E2E)
+├── tests/                    # 82 tests (Agent/HITL/两阶段精排/Tool重试/安全/RAG/CRUD/API/E2E)
 ├── data/                     # 测试数据
 ├── logs/                     # 项目文档 + 开发日志
 ├── Dockerfile
@@ -252,7 +260,7 @@ HireFlowAgents/
 ## 稳定性设计
 
 - Resume Agent: 姓名、邮箱、电话、教育、项目、技能优先从原文规则解析，LLM 输出作为补充，避免章节标题或乱码进入画像。
-- Match Agent: prompt 自动截断，输出强制简洁；单个候选人 LLM 精排失败时返回规则兜底评分，不让 Top N 匹配整体失败。
+- Match Agent: 对关键词召回池中的全部候选人执行七维 LLM 评分，最多 5 个线程并发；prompt 自动截断，输出强制简洁；单个候选人失败时返回规则兜底评分，不让整批精排失败。
 - Evidence Agent: 最大 3 轮、6 次 Tool Call；候选人 ID 由可信运行时注入，常见本地模型参数别名先规范化；临时错误指数退避，不可兼容参数允许模型修正两次，重试耗尽后进入人工选择。
 - RAG 索引健康检查: 匹配前检查每位候选人的 Qdrant 向量；缺失时从 PostgreSQL 简历原文自动重建，重建失败明确提示服务配置，不再误报“证据不足”。
 - Qdrant 写入: Embedding 由 OpenAI 兼容接口生成后直接使用 QdrantClient upsert，不构造新版已禁止的 `embedding=None` LangChain 包装对象。

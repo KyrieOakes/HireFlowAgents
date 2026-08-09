@@ -22,17 +22,19 @@ from app.services.llm_service import call_llm
 
 async def rank_candidates(
     match_results: List[Dict[str, Any]],
+    limit: int = 0,
 ) -> Dict[str, Any]:
     """
-    对所有候选人进行排序和分级。
+    对召回池中的所有候选人进行排序和分级，再返回用户要求的 Top-N。
 
     这个函数分三步:
-    1. 按 total_score 从高到低排序 (纯代码逻辑)
-    2. 分配推荐等级 (纯代码逻辑)
-    3. 生成排序解释 (调用 LLM)
+    1. 按 Match Agent 的 total_score 从高到低排序 (纯代码逻辑)
+    2. 在完整排序产生后截取 Top-N，并分配推荐等级 (纯代码逻辑)
+    3. 为最终返回名单生成排序解释 (调用 LLM)
 
     参数:
         match_results: Match Agent 输出的所有候选人评分列表
+        limit: 最终返回人数；0 表示不截断，返回全部候选人
     返回:
         dict: {
             "ranked_candidates": 排序后的候选人列表,
@@ -47,10 +49,19 @@ async def rank_candidates(
     # sorted() 函数: 对列表排序
     # key=lambda x: x["total_score"]: 按每个结果的 total_score 字段排序
     # reverse=True: 从高到低 (默认是从低到高)
-    ranked = sorted(
+    fully_ranked = sorted(
         match_results,
         key=lambda x: x.get("total_score", 0),
         reverse=True,
+    )
+
+    # 先完成整个召回池的模型评分和排序，再截取用户要求的人数。
+    # max(limit, 0) 防止未来绕过 Pydantic 请求校验时传入负数造成反向切片。
+    normalized_limit = max(limit, 0)
+    ranked = (
+        fully_ranked[:normalized_limit]
+        if normalized_limit > 0
+        else fully_ranked
     )
 
     # ================================================================
@@ -111,6 +122,9 @@ async def rank_candidates(
         "explanation": explanation,
         "summary": {
             "total_candidates": len(ranked),
+            # evaluated_candidates 用来证明精排实际评估了多少人，而不是只评估返回的 Top-N。
+            "evaluated_candidates": len(fully_ranked),
+            "returned_candidates": len(ranked),
             "strong_match": strong_count,
             "medium_match": medium_count,
             "weak_match": weak_count,

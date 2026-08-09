@@ -19,6 +19,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from app.graph.workflow import build_workflow
+from app.graph.nodes import ranking_agent_node
 from app.api.workflow import (
     WorkflowRunRequest,
     _build_workflow_response,
@@ -179,6 +180,86 @@ def test_prepare_initial_state_reuses_database_profiles():
     asyncio.run(run_test())
 
 
+def test_prepare_initial_state_sends_full_recall_pool_to_langgraph():
+    """Top 2 只能在精排后截断，初始状态必须保留完整的关键词召回池。"""
+
+    async def run_test():
+        job = SimpleNamespace(
+            job_id="JOB-1",
+            jd_text="Python 后端工程师",
+            jd_profile_json={"required_skills": ["Python"]},
+            rubric_json={},
+        )
+        candidates = [
+            SimpleNamespace(
+                candidate_id=f"C-{index}",
+                name=f"候选人{index}",
+                profile_json={"name": f"候选人{index}", "skills": ["Python"]},
+                resume_text="Python 项目经历",
+            )
+            for index in range(1, 9)
+        ]
+        recalled_profiles = [
+            {
+                "candidate_id": candidate.candidate_id,
+                "name": candidate.name,
+                "skills": ["Python"],
+            }
+            for candidate in candidates
+        ]
+
+        with patch("app.api.workflow.crud.get_job", return_value=job), patch(
+            "app.api.workflow.crud.get_all_candidates",
+            return_value=candidates,
+        ), patch(
+            "app.api.workflow.pre_screen_candidates",
+            return_value=recalled_profiles,
+        ) as prescreen, patch(
+            "app.api.workflow.ensure_candidate_indexes",
+            new_callable=AsyncMock,
+            return_value=0,
+        ) as ensure_indexes:
+            state = await _prepare_initial_state(
+                WorkflowRunRequest(job_id="JOB-1", limit=2),
+                db=SimpleNamespace(),
+            )
+
+        # 数据库只有 8 人，因此 max(2 * 3, 15) 会被收缩为 8 人召回池。
+        assert prescreen.call_args.kwargs["top_k"] == 8
+        assert state["prescreened_count"] == 8
+        assert len(state["candidate_profiles"]) == 8
+        assert len(ensure_indexes.await_args.args[0]) == 8
+
+    asyncio.run(run_test())
+
+
+def test_ranking_node_truncates_only_after_full_pool_is_scored():
+    """Ranking 必须收到完整 Match 结果，完成排序后才返回用户要求的 Top 2。"""
+
+    async def run_test():
+        state = _initial_state()
+        state["requested_limit"] = 2
+        state["match_results"] = [
+            {"candidate_id": "C-1", "total_score": 70},
+            {"candidate_id": "C-2", "total_score": 92},
+            {"candidate_id": "C-3", "total_score": 81},
+        ]
+
+        with patch(
+            "app.agents.ranking_agent.call_llm",
+            return_value="C-2 与 C-3 的综合匹配度最高",
+        ):
+            result = await ranking_agent_node(state)
+
+        ranking = result["ranking_results"]
+        assert [item["candidate_id"] for item in ranking["ranked_candidates"]] == ["C-2", "C-3"]
+        assert ranking["shortlist"] == ["C-2", "C-3"]
+        assert ranking["summary"]["evaluated_candidates"] == 3
+        assert ranking["summary"]["returned_candidates"] == 2
+
+    asyncio.run(run_test())
+
+
 def test_workflow_response_exposes_pending_review_and_rank():
     """统一响应必须识别人工中断，并给候选人补前端需要的排名序号。"""
     values = _initial_state()
@@ -200,4 +281,5 @@ def test_workflow_response_exposes_pending_review_and_rank():
     assert response["status"] == "pending_review"
     assert response["ranking"]["ranked_candidates"][0]["rank"] == 1
     assert response["ranking"]["shortlist"] == ["C-1"]
+    assert response["returned"] == 1
     assert response["thread_id"] == "thread-1"
