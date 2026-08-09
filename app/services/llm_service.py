@@ -111,7 +111,21 @@ def call_llm(
     return response.content
 
 
-def call_llm_structured(
+async def call_llm_async(
+    system_prompt: str,
+    user_message: str,
+) -> str:
+    """异步调用自由文本模型，供 LangGraph 节点避免阻塞 FastAPI 事件循环。"""
+    llm = _get_llm()
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_message),
+    ]
+    response = await llm.ainvoke(messages)
+    return response.content
+
+
+async def call_llm_structured(
     system_prompt: str,
     user_message: str,
     output_schema: Type[BaseModel],
@@ -147,7 +161,9 @@ def call_llm_structured(
         HumanMessage(content=user_message),
     ]
 
-    return structured_llm.invoke(messages)
+    # ainvoke 使用真正的异步 HTTP I/O；调用方可以用 Semaphore 控制并发，
+    # 不再需要为了并发而创建线程池和每线程事件循环。
+    return await structured_llm.ainvoke(messages)
 
 
 # ================================================================

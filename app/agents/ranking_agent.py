@@ -17,7 +17,7 @@ Ranking Agent: 候选人排序 Agent。
 """
 
 from typing import Dict, Any, List
-from app.services.llm_service import call_llm
+from app.services.llm_service import call_llm_async
 
 
 async def rank_candidates(
@@ -178,7 +178,7 @@ Shortlist (推荐进入面试): {len(shortlist)}人
 2. 对招聘决策的建议"""
 
     # 调用 LLM (自由文本，不需要结构化)
-    explanation = call_llm(
+    explanation = await call_llm_async(
         system_prompt=system_prompt,
         user_message=user_message,
     )

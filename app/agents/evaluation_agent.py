@@ -89,7 +89,7 @@ risk_resolution 中的 reason 必须写中文。
 
     try:
         # 直接让 LangChain + Pydantic约束模型输出，不再手工猜测和修复 JSON。
-        structured = call_llm_structured(
+        structured = await call_llm_structured(
             system_prompt=system_prompt,
             user_message=(
                 user_message

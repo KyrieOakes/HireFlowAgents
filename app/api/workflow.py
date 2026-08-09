@@ -3,23 +3,36 @@ app/api/workflow.py
 ====================
 LangGraph 招聘筛选主流程 API。
 
-POST /workflow/run                 → 从数据库装载岗位和候选人并启动工作流
+POST /workflow/run                 → 创建后台匹配任务并立即返回 thread_id
+GET  /workflow/{thread_id}/events  → 通过 SSE 推送真实执行进度和最终结果
 POST /workflow/{thread_id}/resume  → 提交人工决定并从 checkpoint 恢复
 GET  /workflow/{thread_id}/state   → 读取持久化状态，支持刷新页面后恢复
 """
 
+import asyncio
+import json
 from typing import Any, Dict, List, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import crud
-from app.database.session import get_db
+from app.database.session import SessionLocal, get_db
 from app.graph.state import HiringState
 from app.services.matching_service import ensure_candidate_indexes
 from app.services.pre_screening import pre_screen_candidates
+from app.services.workflow_progress import (
+    create_progress_tracker,
+    fail_progress,
+    finish_progress,
+    get_progress_tracker,
+    iter_progress_events,
+    publish_progress,
+)
 
 
 router = APIRouter(prefix="/workflow", tags=["workflow"])
@@ -66,6 +79,7 @@ class ResumeRequest(BaseModel):
 async def _prepare_initial_state(
     request: WorkflowRunRequest,
     db: Session,
+    progress_run_id: str = "",
 ) -> HiringState:
     """
     从业务数据库构建 LangGraph 初始状态。
@@ -77,6 +91,12 @@ async def _prepare_initial_state(
         HiringState: 已复用结构化 JD、完成粗筛并检查向量索引的初始状态。
     """
     # 第一步读取岗位；LangGraph 只接收已由用户完成解析的岗位。
+    if progress_run_id:
+        await publish_progress(
+            progress_run_id,
+            phase="loading",
+            message="正在从 PostgreSQL 读取岗位和候选人",
+        )
     job = crud.get_job(db, request.job_id)
     if not job:
         raise HTTPException(status_code=404, detail="岗位不存在")
@@ -102,6 +122,14 @@ async def _prepare_initial_state(
     # 关键词阶段只负责低成本召回，不在这里提前截成用户要求的 Top-N。
     # 例如用户选择 Top 5 时，先召回 max(5 * 3, 15) = 15 人；这 15 人都要进入
     # Evidence Agent 和 Match Agent，最后由 Ranking Agent 根据模型评分截取 Top 5。
+    if progress_run_id:
+        await publish_progress(
+            progress_run_id,
+            phase="prescreening",
+            message=f"正在对 {len(all_profiles)} 名候选人执行关键词粗排",
+            total=len(all_profiles),
+        )
+
     pool_size = (
         max(request.limit * 3, 15)
         if request.limit > 0
@@ -114,9 +142,29 @@ async def _prepare_initial_state(
         top_k=pool_size,
     )
 
+    if progress_run_id:
+        await publish_progress(
+            progress_run_id,
+            phase="prescreening",
+            status="completed",
+            message=f"关键词粗排完成，召回 {len(prescreened_profiles)} 人",
+            completed=len(all_profiles),
+            total=len(all_profiles),
+        )
+
     # Evidence Agent 会处理整个召回池，因此这里也必须检查整个召回池的 Qdrant 索引。
     # 如果只检查最终 Top-N，就会再次退化成“关键词先决定结果、模型只做补充说明”。
-    await ensure_candidate_indexes(prescreened_profiles, records_by_id, db)
+    async def report_index_progress(**event: Any) -> None:
+        """把索引检查的候选人级进度转发到当前 thread 的 SSE 事件流。"""
+        if progress_run_id:
+            await publish_progress(progress_run_id, phase="indexing", **event)
+
+    await ensure_candidate_indexes(
+        prescreened_profiles,
+        records_by_id,
+        db,
+        progress_callback=report_index_progress if progress_run_id else None,
+    )
 
     # Match Agent 从 jd_profile.rubric 读取评分规则，因此把数据库独立列合并进状态副本。
     jd_profile = dict(job.jd_profile_json)
@@ -125,6 +173,7 @@ async def _prepare_initial_state(
 
     return {
         "job_id": request.job_id,
+        "progress_run_id": progress_run_id,
         "jd_text": job.jd_text,
         "jd_profile": jd_profile,
         "requested_limit": request.limit,
@@ -295,74 +344,212 @@ def _build_workflow_response(
 # API 路由
 # ================================================================
 
-@router.post("/run")
-async def run_workflow(
+async def _execute_workflow_run(
+    thread_id: str,
     request: WorkflowRunRequest,
-    db: Session = Depends(get_db),
-):
-    """启动完整 LangGraph 筛选流程，运行到第一个人工中断点。"""
+) -> None:
+    """
+    在后台执行完整 LangGraph，最终结果通过进度注册表交给 SSE。
+
+    请求级 SQLAlchemy Session 在 POST 返回后会关闭，因此后台任务必须创建并关闭
+    自己的 Session，不能复用 FastAPI Depends 注入的对象。
+    """
     from app.graph.workflow import open_workflow
 
-    # 每次运行都生成唯一线程，避免多个岗位或浏览器会话共享 checkpoint。
-    thread_id = f"hireflow-{request.job_id}-{uuid4().hex}"
+    db = SessionLocal()
     thread_config = {"configurable": {"thread_id": thread_id}}
-    initial_state = await _prepare_initial_state(request, db)
-
     try:
+        initial_state = await _prepare_initial_state(
+            request,
+            db,
+            progress_run_id=thread_id,
+        )
         async with open_workflow() as workflow:
             result = await workflow.ainvoke(initial_state, thread_config)
         _save_match_results(db, result)
-        return _build_workflow_response(
+        response = _build_workflow_response(
             values=result,
             thread_id=thread_id,
             interrupt_payload=_extract_interrupt_payload(result),
         )
-    except HTTPException:
+        await finish_progress(thread_id, response)
+    except HTTPException as exc:
+        await fail_progress(thread_id, str(exc.detail))
+    except asyncio.CancelledError:
+        await fail_progress(thread_id, "匹配任务因服务关闭而中止，可从 checkpoint 检查进度后重试")
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"工作流执行失败: {str(exc)}") from exc
+        # SSE 只返回可操作的上层信息；底层服务地址和密钥不能直接暴露给浏览器。
+        await fail_progress(thread_id, f"工作流执行失败: {str(exc)}")
+    finally:
+        db.close()
 
 
-@router.post("/{thread_id}/resume")
+@router.post("/run", status_code=202)
+async def run_workflow(
+    request: WorkflowRunRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """创建后台筛选任务并立即返回 thread_id，避免浏览器空等长请求。"""
+
+    # 在返回 202 前完成低成本前置校验，让明显输入错误继续使用标准 HTTP 状态码。
+    job = crud.get_job(db, request.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="岗位不存在")
+    if not job.jd_profile_json:
+        raise HTTPException(status_code=400, detail="岗位尚未解析，请先解析岗位")
+    if not any(candidate.profile_json for candidate in crud.get_all_candidates(db)):
+        raise HTTPException(status_code=400, detail="没有已解析的候选人，请先解析简历")
+
+    # 每次运行都生成唯一线程，避免多个岗位或浏览器会话共享 checkpoint。
+    thread_id = f"hireflow-{request.job_id}-{uuid4().hex}"
+    create_progress_tracker(thread_id, request.job_id)
+    # Starlette 会先把 202 响应发送给浏览器，再在应用事件循环中执行异步后台任务。
+    # 相比裸 asyncio.create_task，这种方式会由框架持有任务生命周期和异常边界。
+    background_tasks.add_task(
+        _execute_workflow_run,
+        thread_id,
+        request.model_copy(deep=True),
+    )
+
+    return {
+        "status": "queued",
+        "message": "匹配任务已创建，正在等待后端执行",
+        "thread_id": thread_id,
+        "job_id": request.job_id,
+        "limit": request.limit,
+    }
+
+
+@router.get("/{thread_id}/events")
+async def stream_workflow_events(
+    thread_id: str,
+    after_sequence: int = 0,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+):
+    """通过 Server-Sent Events 回放并持续推送某次匹配的真实进度。"""
+    if not get_progress_tracker(thread_id):
+        raise HTTPException(status_code=404, detail="没有找到该任务的实时进度")
+
+    # 浏览器自动重连 EventSource 时会发送 Last-Event-ID，避免从头重复渲染事件。
+    resume_sequence = after_sequence
+    if last_event_id and last_event_id.isdigit():
+        resume_sequence = max(resume_sequence, int(last_event_id))
+
+    async def event_stream():
+        async for event in iter_progress_events(thread_id, resume_sequence):
+            if event is None:
+                # SSE 注释是标准心跳格式，不会触发前端 message 回调。
+                yield ": keep-alive\n\n"
+                continue
+            payload = json.dumps(jsonable_encoder(event), ensure_ascii=False)
+            yield f"id: {event.get('sequence', 0)}\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/{thread_id}/resume", status_code=202)
 async def resume_workflow(
     thread_id: str,
     request: ResumeRequest,
-    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks,
 ):
-    """把人工决定交给 ``Command(resume=...)`` 并从持久化中断点继续。"""
-    from langgraph.types import Command
+    """校验 checkpoint 后立即返回，再在后台执行 ``Command(resume=...)``。"""
     from app.graph.workflow import open_workflow
 
     thread_config = {"configurable": {"thread_id": thread_id}}
-    human_input = {
-        "action": request.action,
-        "selected_candidate_ids": request.selected_candidate_ids,
-        "comment": request.comment,
-    }
-
     try:
         async with open_workflow() as workflow:
-            # 先确认 thread 确实存在，避免把错误 ID 当成一个“已完成”的空工作流。
+            # 这里只读取一次 checkpoint 做快速校验，真正恢复动作交给后台任务。
             snapshot = await workflow.aget_state(thread_config)
             if not snapshot.values:
                 raise HTTPException(status_code=404, detail="没有找到该工作流")
-            result = await workflow.ainvoke(Command(resume=human_input), thread_config)
-        _save_match_results(db, result)
-        return _build_workflow_response(
-            values=result,
-            thread_id=thread_id,
-            interrupt_payload=_extract_interrupt_payload(result),
+            job_id = str(snapshot.values.get("job_id", ""))
+
+        # 覆盖旧的已结束进度流；PostgreSQL checkpoint 本身不会被删除。
+        create_progress_tracker(thread_id, job_id)
+        background_tasks.add_task(
+            _execute_workflow_resume,
+            thread_id,
+            request.model_copy(deep=True),
         )
+        return {
+            "status": "queued",
+            "message": "人工决定已提交，正在从 checkpoint 恢复",
+            "thread_id": thread_id,
+            "job_id": job_id,
+            "limit": int(snapshot.values.get("requested_limit", 0)),
+        }
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"恢复工作流失败: {str(exc)}") from exc
 
 
+async def _execute_workflow_resume(thread_id: str, request: ResumeRequest) -> None:
+    """在后台执行人工恢复动作，并把重试、重排或完成进度继续推送到同一 SSE。"""
+    from langgraph.types import Command
+    from app.graph.workflow import open_workflow
+
+    db = SessionLocal()
+    thread_config = {"configurable": {"thread_id": thread_id}}
+    human_input = {
+        "action": request.action,
+        "selected_candidate_ids": request.selected_candidate_ids,
+        "comment": request.comment,
+    }
+    try:
+        await publish_progress(
+            thread_id,
+            phase="loading",
+            message=f"正在恢复工作流，人工动作：{request.action}",
+        )
+        async with open_workflow() as workflow:
+            result = await workflow.ainvoke(Command(resume=human_input), thread_config)
+        _save_match_results(db, result)
+        response = _build_workflow_response(
+            values=result,
+            thread_id=thread_id,
+            interrupt_payload=_extract_interrupt_payload(result),
+        )
+        await finish_progress(thread_id, response)
+    except asyncio.CancelledError:
+        await fail_progress(thread_id, "工作流恢复因服务关闭而中止，请重新检查 checkpoint")
+        raise
+    except Exception as exc:
+        await fail_progress(thread_id, f"恢复工作流失败: {str(exc)}")
+    finally:
+        db.close()
+
+
 @router.get("/{thread_id}/state")
 async def get_workflow_state(thread_id: str):
     """读取 PostgreSQL checkpoint，供刷新页面后的前端恢复当前工作流。"""
     from app.graph.workflow import open_workflow
+
+    # 后台任务仍在运行时优先返回进程内真实状态，避免把尚未产生排名的中间
+    # checkpoint 误判成 completed。最终响应已经产生时也可以直接复用。
+    tracker = get_progress_tracker(thread_id)
+    if tracker:
+        if tracker.response:
+            return tracker.response
+        latest = tracker.events[-1] if tracker.events else {}
+        return {
+            "status": tracker.status,
+            "message": latest.get("message", "任务正在后台执行"),
+            "thread_id": thread_id,
+            "job_id": tracker.job_id,
+            "progress": latest,
+        }
 
     thread_config = {"configurable": {"thread_id": thread_id}}
     try:

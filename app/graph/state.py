@@ -25,6 +25,8 @@ class HiringState(TypedDict):
     # ---- 岗位相关 ----
     # job_id: 岗位的唯一标识符 (字符串)
     job_id: str
+    # progress_run_id: 当前后台任务 ID，用于把节点真实进度推送到 SSE
+    progress_run_id: str
     # jd_text: 用户上传的原始岗位描述全文
     jd_text: str
     # jd_profile: JD Agent 解析后的结构化岗位信息 (JSON 字典)

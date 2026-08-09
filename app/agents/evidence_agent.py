@@ -933,23 +933,78 @@ async def batch_collect_evidence(
     *,
     jd_profile: Dict[str, Any],
     candidate_profiles: List[Dict[str, Any]],
+    progress_callback: Optional[Callable[..., Awaitable[None]]] = None,
+    max_concurrency: Optional[int] = None,
 ) -> tuple[Dict[str, List[Dict[str, Any]]], List[EvidenceAgentRun]]:
     """
-    依次运行候选人的证据 Agent。
+    使用保守的有界并发运行候选人的证据 Agent。
 
-    本地 LM Studio 通常一次只能稳定处理少量请求，因此这里先使用顺序执行；
-    Match Agent 后续仍保留线程池并行评分。
+    本地 LM Studio 通常只能稳定处理少量并行请求，因此默认并发为 2，而不是把
+    15 名候选人一次性全部提交。结果仍按粗排输入顺序返回，方便测试和审计。
     """
-    evidence_by_candidate: Dict[str, List[Dict[str, Any]]] = {}
-    runs: List[EvidenceAgentRun] = []
+    total = len(candidate_profiles)
+    configured_limit = max_concurrency or settings.evidence_agent.candidate_concurrency
+    concurrency = max(1, min(configured_limit, total or 1))
+    semaphore = asyncio.Semaphore(concurrency)
+    progress_lock = asyncio.Lock()
+    completed = 0
 
-    for profile in candidate_profiles:
-        run = await run_evidence_agent(
-            jd_profile=jd_profile,
-            candidate_profile=profile,
+    if progress_callback:
+        await progress_callback(
+            message=f"Evidence Agent 开始检索 {total} 名候选人，并发上限 {concurrency}",
+            completed=0,
+            total=total,
         )
-        runs.append(run)
-        evidence_by_candidate[run.candidate_id] = run.evidence
+
+    async def collect_one(index: int, profile: Dict[str, Any]):
+        """在信号量范围内处理一名候选人，并上报真实完成数量。"""
+        nonlocal completed
+        candidate_id = str(profile.get("candidate_id", ""))
+        candidate_name = str(profile.get("name") or candidate_id or "未知候选人")
+
+        async with semaphore:
+            if progress_callback:
+                await progress_callback(
+                    message=f"Evidence Agent 正在检索：{candidate_name}",
+                    completed=completed,
+                    total=total,
+                    candidate_id=candidate_id,
+                    candidate_name=candidate_name,
+                )
+            run = await run_evidence_agent(
+                jd_profile=jd_profile,
+                candidate_profile=profile,
+            )
+
+        # 多个候选人可能同时结束，用锁保证 completed 不会丢失更新。
+        async with progress_lock:
+            completed += 1
+            current_completed = completed
+
+        if progress_callback:
+            await progress_callback(
+                message=f"Evidence Agent 已完成：{candidate_name}（{current_completed}/{total}）",
+                completed=current_completed,
+                total=total,
+                candidate_id=candidate_id,
+                candidate_name=candidate_name,
+            )
+        return index, run
+
+    indexed_runs = await asyncio.gather(
+        *(collect_one(index, profile) for index, profile in enumerate(candidate_profiles))
+    )
+    # gather 返回顺序通常与输入一致，但这里仍按显式 index 排序，避免未来实现变更。
+    runs = [run for _, run in sorted(indexed_runs, key=lambda item: item[0])]
+    evidence_by_candidate = {run.candidate_id: run.evidence for run in runs}
+
+    if progress_callback:
+        await progress_callback(
+            status="completed",
+            message=f"Evidence Agent 完成 {total} 名候选人的证据检索",
+            completed=total,
+            total=total,
+        )
 
     return evidence_by_candidate, runs
 

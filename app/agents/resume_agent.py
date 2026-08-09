@@ -607,7 +607,7 @@ async def parse_resume(
 - 经验年限从工作经历推算, 无数据则 null"""
 
     # 调用 LLM 进行结构化提取
-    candidate_profile = call_llm_structured(
+    candidate_profile = await call_llm_structured(
         system_prompt=system_prompt,
         user_message=f"请解析以下候选人简历:\n\n{resume_text}",
         output_schema=CandidateProfile,

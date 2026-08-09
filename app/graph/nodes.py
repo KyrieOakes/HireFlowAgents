@@ -19,6 +19,7 @@ from app.agents.jd_agent import analyze_jd
 from app.agents.resume_agent import parse_resume, batch_parse_resumes
 from app.agents.match_agent import match_candidate, batch_match_candidates
 from app.agents.ranking_agent import rank_candidates
+from app.services.workflow_progress import publish_progress
 
 
 # ================================================================
@@ -150,15 +151,22 @@ async def evidence_retrieval_node(state: HiringState) -> Dict[str, Any]:
     """
     jd_profile = state.get("jd_profile", {})
     candidates = state.get("candidate_profiles", [])
+    progress_run_id = state.get("progress_run_id", "")
 
     if not jd_profile:
         return {"errors": ["JD profile 为空，无法检索证据"]}
 
     # 每个候选人运行一个有边界的 ReAct 子图；模型决定查询，工具节点负责
     # 候选人隔离、错误分类、指数退避和审计记录。
+    async def report_evidence_progress(**event: Any) -> None:
+        """把 Evidence 批处理内部的候选人进度写入当前 SSE 任务。"""
+        if progress_run_id:
+            await publish_progress(progress_run_id, phase="evidence", **event)
+
     evidence, run_models = await batch_collect_evidence(
         jd_profile=jd_profile,
         candidate_profiles=candidates,
+        progress_callback=report_evidence_progress if progress_run_id else None,
     )
     intervention_models = build_interventions(run_models)
 
@@ -248,9 +256,15 @@ async def match_agent_node(state: HiringState) -> Dict[str, Any]:
     candidates = state.get("candidate_profiles", [])
     evidence_by_candidate = state.get("retrieved_evidence", {})
     rubric = jd_profile.get("rubric", {})
+    progress_run_id = state.get("progress_run_id", "")
 
     if not jd_profile or not candidates:
         return {"errors": ["JD profile 或候选人列表为空，无法匹配"]}
+
+    async def report_match_progress(**event: Any) -> None:
+        """把真异步 Match 批处理的完成数量写入当前 SSE 任务。"""
+        if progress_run_id:
+            await publish_progress(progress_run_id, phase="matching", **event)
 
     # 批量匹配评分
     match_results = await batch_match_candidates(
@@ -258,6 +272,7 @@ async def match_agent_node(state: HiringState) -> Dict[str, Any]:
         candidate_profiles=candidates,
         evidence_by_candidate=evidence_by_candidate,
         rubric=rubric,
+        progress_callback=report_match_progress if progress_run_id else None,
     )
 
     return {"match_results": match_results}
@@ -276,13 +291,34 @@ async def ranking_agent_node(state: HiringState) -> Dict[str, Any]:
     """
     match_results = state.get("match_results", [])
     requested_limit = state.get("requested_limit", 0)
+    progress_run_id = state.get("progress_run_id", "")
 
     if not match_results:
         return {"errors": ["没有匹配结果，无法排序"]}
 
+    if progress_run_id:
+        await publish_progress(
+            progress_run_id,
+            phase="ranking",
+            message=f"Ranking Agent 正在从 {len(match_results)} 人中生成 Top {requested_limit or len(match_results)}",
+            completed=0,
+            total=len(match_results),
+        )
+
     # Match Agent 已经对整个粗排召回池完成 LLM 评分。
     # Top-N 必须在这些分数全部产生后再截取，才能构成真正的“召回 + 精排”。
     ranking = await rank_candidates(match_results, limit=requested_limit)
+
+    if progress_run_id:
+        returned = len(ranking.get("ranked_candidates", []))
+        await publish_progress(
+            progress_run_id,
+            phase="ranking",
+            status="completed",
+            message=f"Ranking Agent 已生成 Top {returned}，等待人工确认",
+            completed=returned,
+            total=returned,
+        )
 
     return {"ranking_results": ranking}
 

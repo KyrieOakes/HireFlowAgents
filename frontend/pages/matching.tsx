@@ -14,6 +14,7 @@ import type {
   Job,
   MatchDetail,
   RankedCandidate,
+  WorkflowProgressEvent,
   WorkflowResponse,
   WorkflowStatus,
 } from "@/types";
@@ -21,6 +22,7 @@ import {
   listJobs,
   listCandidates,
   startMatchingWorkflow,
+  streamMatchingWorkflow,
   resumeMatchingWorkflow,
   getMatchingWorkflowState,
   getMatchDetail,
@@ -38,6 +40,17 @@ import ScoreBar from "@/components/ScoreBar";
 import AgentTracePanel from "@/components/AgentTracePanel";
 import Modal from "@/components/Modal";
 
+
+// 后端 phase 使用稳定英文值，页面集中映射为用户能直接理解的中文阶段名。
+const PROGRESS_PHASE_LABELS: Record<string, string> = {
+  loading: "读取数据",
+  prescreening: "关键词粗排",
+  indexing: "证据索引检查",
+  evidence: "Evidence Agent",
+  matching: "Match Agent",
+  ranking: "Ranking Agent",
+};
+
 export default function MatchingPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -54,6 +67,8 @@ export default function MatchingPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);  // 匹配耗时计时器
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  // 切换岗位或组件卸载时关闭旧 SSE，避免不同任务的事件写进同一个页面。
+  const progressAbortRef = useRef<AbortController | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState("");
   const [questions, setQuestions] = useState<InterviewQuestion[]>([]);
   const [evaluation, setEvaluation] = useState<InterviewEvaluation | null>(null);
@@ -73,6 +88,9 @@ export default function MatchingPage() {
   const [defaultShortlistIds, setDefaultShortlistIds] = useState<string[]>([]);
   // 三个数字分别展示粗排召回、LLM 精排和最终返回人数，方便验证两阶段排序真实发生。
   const [pipelineStats, setPipelineStats] = useState({ prescreened: 0, llmScored: 0, returned: 0 });
+  // 选择岗位后只提示存在旧任务，由用户明确决定恢复还是开始新匹配。
+  const [savedWorkflowThreadId, setSavedWorkflowThreadId] = useState("");
+  const [workflowProgress, setWorkflowProgress] = useState<WorkflowProgressEvent | null>(null);
 
   // candidate_id → name 映射表 (用于显示姓名而非ID)
   const nameMap: Record<string, string> = {};
@@ -98,34 +116,45 @@ export default function MatchingPage() {
     })();
   }, []);
 
-  // 用户切换岗位时，尝试从浏览器保存的 thread_id 恢复 PostgreSQL checkpoint。
+  // 用户切换岗位时清空当前展示；发现历史 thread_id 只显示选择框，不自动灌入旧排名。
   useEffect(() => {
-    if (!selectedJobId) return;
-    const savedThreadId = window.localStorage.getItem(`hireflow-workflow:${selectedJobId}`);
-    if (!savedThreadId) return;
+    progressAbortRef.current?.abort();
+    progressAbortRef.current = null;
+    finishWorkflowRequest();
+    resetWorkflowDisplay();
 
-    let cancelled = false;
-    (async () => {
-      setMatching(true);
-      try {
-        const response = await getMatchingWorkflowState(savedThreadId);
-        if (cancelled) return;
-        if (response.status === "not_found") {
-          window.localStorage.removeItem(`hireflow-workflow:${selectedJobId}`);
-          return;
-        }
-        applyWorkflowResponse(response);
-      } catch {
-        // 恢复失败不阻止用户重新点击“开始匹配”；后端错误会在新运行时正常显示。
-      } finally {
-        if (!cancelled) setMatching(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    if (!selectedJobId) {
+      setSavedWorkflowThreadId("");
+      return;
+    }
+    const savedThreadId = window.localStorage.getItem(`hireflow-workflow:${selectedJobId}`) || "";
+    setSavedWorkflowThreadId(savedThreadId);
   }, [selectedJobId]);
+
+  // 离开页面时关闭计时器和 SSE；后端任务仍可继续并保存 checkpoint。
+  useEffect(() => () => {
+    progressAbortRef.current?.abort();
+    if (timerRef.current) clearInterval(timerRef.current);
+  }, []);
+
+  /** 清空某个岗位之前显示的排名、Agent 轨迹和后续面试内容。 */
+  function resetWorkflowDisplay() {
+    setRanked([]);
+    setAgentRuns([]);
+    setAgentInterventions([]);
+    setAgentMessage("");
+    setWorkflowStatus("");
+    setWorkflowThreadId("");
+    setReviewCandidateIds([]);
+    setDefaultShortlistIds([]);
+    setPipelineStats({ prescreened: 0, llmScored: 0, returned: 0 });
+    setWorkflowProgress(null);
+    setSelectedCandidateId("");
+    setQuestions([]);
+    setEvaluation(null);
+    setDrafts([]);
+    setFeedback("");
+  }
 
   /** 把启动、恢复、状态查询的统一响应同步到页面。 */
   function applyWorkflowResponse(response: WorkflowResponse) {
@@ -168,6 +197,7 @@ export default function MatchingPage() {
     setMatching(true);
     setError(null);
     setElapsed(0);
+    setWorkflowProgress(null);
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
   }
 
@@ -185,28 +215,72 @@ export default function MatchingPage() {
   async function handleMatch() {
     if (!selectedJobId || matchLock.current) return;
     beginWorkflowRequest();
-    setRanked([]);
-    setAgentRuns([]);
-    setAgentInterventions([]);
-    setWorkflowStatus("");
-    setWorkflowThreadId("");
-    setReviewCandidateIds([]);
-    setDefaultShortlistIds([]);
-    setPipelineStats({ prescreened: 0, llmScored: 0, returned: 0 });
+    resetWorkflowDisplay();
+    setSavedWorkflowThreadId("");
     try {
-      const response = await startMatchingWorkflow(selectedJobId, limit);
+      const started = await startMatchingWorkflow(selectedJobId, limit);
+      setWorkflowThreadId(started.thread_id);
+      setWorkflowStatus(started.status);
+      // POST 已经快速拿到 thread_id，此时立即保存；刷新后可以主动恢复后台任务。
+      window.localStorage.setItem(`hireflow-workflow:${selectedJobId}`, started.thread_id);
+
+      const controller = new AbortController();
+      progressAbortRef.current = controller;
+      const response = await streamMatchingWorkflow(
+        started.thread_id,
+        setWorkflowProgress,
+        controller.signal,
+      );
       applyWorkflowResponse(response);
-      // 保存 thread_id 后，即使刷新页面也可以通过 GET /workflow/{id}/state 恢复。
-      window.localStorage.setItem(`hireflow-workflow:${selectedJobId}`, response.thread_id);
-      setQuestions([]);
-      setEvaluation(null);
-      setDrafts([]);
-      setFeedback("");
     } catch (e: any) {
-      setError(e.message);
+      if (e?.name !== "AbortError") setError(e.message);
     } finally {
+      progressAbortRef.current = null;
       finishWorkflowRequest();
     }
+  }
+
+  /** 用户明确选择“恢复上次任务”后，才读取 checkpoint 或重新订阅正在运行的 SSE。 */
+  async function handleRestoreWorkflow() {
+    if (!savedWorkflowThreadId || matchLock.current) return;
+    beginWorkflowRequest();
+    try {
+      const response = await getMatchingWorkflowState(savedWorkflowThreadId);
+      if (response.status === "not_found") {
+        window.localStorage.removeItem(`hireflow-workflow:${selectedJobId}`);
+        setSavedWorkflowThreadId("");
+        throw new Error("上次任务已经不存在，请开始新匹配");
+      }
+
+      setWorkflowThreadId(savedWorkflowThreadId);
+      if (response.progress) setWorkflowProgress(response.progress);
+      if (response.status === "queued" || response.status === "running") {
+        const controller = new AbortController();
+        progressAbortRef.current = controller;
+        const finalResponse = await streamMatchingWorkflow(
+          savedWorkflowThreadId,
+          setWorkflowProgress,
+          controller.signal,
+        );
+        applyWorkflowResponse(finalResponse);
+      } else {
+        applyWorkflowResponse(response);
+      }
+      setSavedWorkflowThreadId("");
+    } catch (e: any) {
+      if (e?.name !== "AbortError") setError(e.message);
+    } finally {
+      progressAbortRef.current = null;
+      finishWorkflowRequest();
+    }
+  }
+
+  /** 放弃页面关联的旧 thread_id，但保留 PostgreSQL 历史记录并启动全新任务。 */
+  async function handleStartNewWorkflow() {
+    if (!selectedJobId) return;
+    window.localStorage.removeItem(`hireflow-workflow:${selectedJobId}`);
+    setSavedWorkflowThreadId("");
+    await handleMatch();
   }
 
   /** 从当前 interrupt 恢复工作流；证据处理和最终排名审核都复用此函数。 */
@@ -217,11 +291,19 @@ export default function MatchingPage() {
     if (!workflowThreadId || matchLock.current) return;
     beginWorkflowRequest();
     try {
-      const response = await resumeMatchingWorkflow(workflowThreadId, action, selectedIds);
+      const started = await resumeMatchingWorkflow(workflowThreadId, action, selectedIds);
+      const controller = new AbortController();
+      progressAbortRef.current = controller;
+      const response = await streamMatchingWorkflow(
+        started.thread_id,
+        setWorkflowProgress,
+        controller.signal,
+      );
       applyWorkflowResponse(response);
     } catch (e: any) {
-      setError(e.message);
+      if (e?.name !== "AbortError") setError(e.message);
     } finally {
+      progressAbortRef.current = null;
       finishWorkflowRequest();
     }
   }
@@ -366,23 +448,76 @@ export default function MatchingPage() {
               <option value={0}>全部</option>
             </select>
           </div>
-          <LoadingButton onClick={() => handleMatch()} loading={matching} disabled={!selectedJobId}>
-            开始匹配
+          <LoadingButton
+            onClick={() => handleMatch()}
+            loading={matching}
+            disabled={!selectedJobId || Boolean(savedWorkflowThreadId)}
+          >
+            {savedWorkflowThreadId ? "请先选择处理方式" : "开始匹配"}
           </LoadingButton>
         </div>
+        {savedWorkflowThreadId && !matching && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/80 p-4">
+            <p className="text-sm font-medium text-amber-900">发现这个岗位的上一次匹配任务</p>
+            <p className="mt-1 text-xs text-amber-700">
+              系统不会自动展示旧结果。你可以恢复原 checkpoint，也可以创建一个全新的 thread。
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleRestoreWorkflow}
+                className="rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700"
+              >
+                恢复上次任务
+              </button>
+              <button
+                type="button"
+                onClick={handleStartNewWorkflow}
+                className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+              >
+                开始新匹配
+              </button>
+            </div>
+          </div>
+        )}
         {/* 匹配进度提示 */}
         {matching && (
-          <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50/80 p-3 backdrop-blur">
-            <div className="flex items-center gap-3">
+          <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50/80 p-4 backdrop-blur">
+            <div className="flex items-start gap-3">
               <svg className="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="none">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
               </svg>
-              <span className="text-sm text-sky-700">
-                正在匹配中... Evidence Agent 正在规划查询并调用工具
-              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-sky-800">
+                    {workflowProgress
+                      ? PROGRESS_PHASE_LABELS[workflowProgress.phase] || workflowProgress.phase
+                      : "正在创建后台任务"}
+                  </span>
+                  <span className="text-xs text-sky-600">已等待 {elapsed} 秒</span>
+                </div>
+                <p className="mt-1 text-sm text-sky-700">
+                  {workflowProgress?.message || "正在等待后端返回第一条真实进度"}
+                </p>
+                {workflowProgress && workflowProgress.total > 0 && (
+                  <div className="mt-3">
+                    <div className="mb-1 flex justify-between text-xs text-sky-600">
+                      <span>{workflowProgress.candidate_name || "阶段进度"}</span>
+                      <span>{workflowProgress.completed} / {workflowProgress.total}</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-sky-100">
+                      <div
+                        className="h-full rounded-full bg-sky-500 transition-all duration-300"
+                        style={{
+                          width: `${Math.min(100, Math.max(0, workflowProgress.completed / workflowProgress.total * 100))}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-            <p className="mt-2 text-xs text-sky-500">已等待 {elapsed} 秒 | 本地模型处理中, 请耐心等候</p>
           </div>
         )}
         {!matching && pipelineStats.prescreened > 0 && (

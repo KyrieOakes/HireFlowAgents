@@ -162,6 +162,8 @@ class EvidenceAgentSettings(BaseSettings):
     initial_retry_interval: float = 0.5
     # 模型连续两次生成非法工具参数后停止并交给人工。
     max_correctable_errors: int = 2
+    # 同时处理的候选人数保持较小，避免本地 LM Studio 因请求过多发生显存竞争。
+    candidate_concurrency: int = 2
 
     class Config:
         env_prefix = "EVIDENCE_AGENT_"

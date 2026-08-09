@@ -182,6 +182,8 @@ export type AgentInterventionAction =
 
 /** LangGraph 可以停在证据审核或最终排名审核，也可以正常完成或失败。 */
 export type WorkflowStatus =
+  | "queued"
+  | "running"
   | "evidence_agent_needs_review"
   | "pending_review"
   | "completed"
@@ -217,6 +219,31 @@ export interface WorkflowResponse {
   human_review_status?: string;
   errors?: string[];
   next_steps?: string[];
+  progress?: WorkflowProgressEvent;
+}
+
+/** POST /workflow/run 只负责创建后台任务，因此返回轻量启动信息。 */
+export interface WorkflowStartResponse {
+  status: "queued";
+  message: string;
+  thread_id: string;
+  job_id: string;
+  limit: number;
+}
+
+/** 后端通过 SSE 推送的真实阶段进度。 */
+export interface WorkflowProgressEvent {
+  type: "progress";
+  sequence: number;
+  thread_id: string;
+  phase: "loading" | "prescreening" | "indexing" | "evidence" | "matching" | "ranking" | string;
+  status: string;
+  message: string;
+  completed: number;
+  total: number;
+  candidate_id?: string;
+  candidate_name?: string;
+  elapsed_seconds: number;
 }
 
 /** 排序结果 */

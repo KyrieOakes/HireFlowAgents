@@ -246,7 +246,8 @@ def test_ranking_node_truncates_only_after_full_pool_is_scored():
         ]
 
         with patch(
-            "app.agents.ranking_agent.call_llm",
+            "app.agents.ranking_agent.call_llm_async",
+            new_callable=AsyncMock,
             return_value="C-2 与 C-3 的综合匹配度最高",
         ):
             result = await ranking_agent_node(state)

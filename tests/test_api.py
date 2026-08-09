@@ -260,6 +260,9 @@ def test_workflow_pauses_for_evidence_agent_intervention(client):
     )
 
     with patch(
+        "app.api.workflow.SessionLocal",
+        TestingSession,
+    ), patch(
         "app.api.workflow.ensure_candidate_indexes",
         new_callable=AsyncMock,
         return_value=0,
@@ -276,9 +279,13 @@ def test_workflow_pauses_for_evidence_agent_intervention(client):
             json={"job_id": job_id, "limit": 1},
         )
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "evidence_agent_needs_review"
+    assert response.status_code == 202
+    thread_id = response.json()["thread_id"]
+    # TestClient 会等待 Starlette BackgroundTasks 收尾，再从状态接口读取最终中断结果。
+    state_response = client.get(f"/workflow/{thread_id}/state")
+    assert state_response.status_code == 200
+    payload = state_response.json()
+    assert payload["status"] == "evidence_agent_needs_review", payload
     assert payload["llm_scored"] == 0
     assert payload["interventions"][0]["available_actions"] == [
         "retry_agent",
@@ -316,7 +323,7 @@ def test_full_pipeline_smoke(client):
 
     # Mock JD Agent
     from app.schemas.jd_schema import JobDescription
-    with patch("app.agents.jd_agent.call_llm_structured") as mock_jd:
+    with patch("app.agents.jd_agent.call_llm_structured", new_callable=AsyncMock) as mock_jd:
         mock_jd.return_value = JobDescription(
             job_title="Python后端工程师",
             required_skills=["Python","FastAPI","Docker"],
@@ -341,7 +348,7 @@ def test_full_pipeline_smoke(client):
 
     # Mock Resume Agent
     from app.schemas.resume_schema import CandidateProfile, Education, Project
-    with patch("app.agents.resume_agent.call_llm_structured") as mock_resume:
+    with patch("app.agents.resume_agent.call_llm_structured", new_callable=AsyncMock) as mock_resume:
         mock_resume.return_value = CandidateProfile(
             candidate_id=cid, name="张三",
             education=[Education(degree="学士", school="清华大学", major="计算机科学")],
@@ -385,6 +392,9 @@ def test_full_pipeline_smoke(client):
         stop_reason="evidence_collected",
     )
     with patch(
+        "app.api.workflow.SessionLocal",
+        TestingSession,
+    ), patch(
         "app.api.workflow.ensure_candidate_indexes",
         new_callable=AsyncMock,
         return_value=0,
@@ -396,7 +406,7 @@ def test_full_pipeline_smoke(client):
         "app.graph.workflow.open_workflow",
         new=open_test_workflow,
     ):
-        with patch("app.agents.match_agent.call_llm_structured") as mock_match:
+        with patch("app.agents.match_agent.call_llm_structured", new_callable=AsyncMock) as mock_match:
             mock_match.return_value = MatchResult(
                 candidate_id=cid, total_score=85.0,
                 dimension_scores=DimensionScores(
@@ -409,15 +419,18 @@ def test_full_pipeline_smoke(client):
                 recommendation="Strong Match",
                 summary="总体匹配良好",
             )
-            with patch("app.agents.ranking_agent.call_llm") as mock_rank:
+            with patch("app.agents.ranking_agent.call_llm_async", new_callable=AsyncMock) as mock_rank:
                 mock_rank.return_value = "排名合理, 张三排第一"
                 r3 = client.post(
                     "/workflow/run",
                     json={"job_id": jid, "limit": 5},
                 )
-                assert r3.status_code == 200
-                data3 = r3.json()
-                assert data3["status"] == "pending_review"
+                assert r3.status_code == 202
+                workflow_thread_id = r3.json()["thread_id"]
+                state_response = client.get(f"/workflow/{workflow_thread_id}/state")
+                assert state_response.status_code == 200
+                data3 = state_response.json()
+                assert data3["status"] == "pending_review", data3
                 assert data3["llm_scored"] >= 1
                 assert len(data3["ranking"]["ranked_candidates"]) >= 1
                 assert data3["agent_runs"][0]["tool_calls"][0]["attempts"] == 1
@@ -439,7 +452,7 @@ def test_full_pipeline_smoke(client):
 
     # Step 5: 面试评价
     from app.schemas.evaluation_schema import InterviewEvaluationOutput, RiskResolution
-    with patch("app.agents.evaluation_agent.call_llm_structured") as mock_eval:
+    with patch("app.agents.evaluation_agent.call_llm_structured", new_callable=AsyncMock) as mock_eval:
         mock_eval.return_value = InterviewEvaluationOutput(
             technical_depth_score=8,
             communication_score=7,
@@ -460,7 +473,7 @@ def test_full_pipeline_smoke(client):
 
     # Step 6: 邮件草稿
     from app.schemas.email_schema import EmailContentOutput
-    with patch("app.agents.email_agent.call_llm_structured") as mock_email:
+    with patch("app.agents.email_agent.call_llm_structured", new_callable=AsyncMock) as mock_email:
         mock_email.return_value = EmailContentOutput(
             subject="面试邀请 - Python后端工程师",
             body="尊敬的张三：\n\n恭喜您通过初步筛选，诚邀您参加面试。\n\n面试时间：待HR确认后另行通知",

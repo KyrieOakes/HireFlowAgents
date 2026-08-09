@@ -7,7 +7,7 @@ Resume Agent 单元测试 (mock LLM)。
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 def test_parse_resume_structure():
@@ -16,7 +16,7 @@ def test_parse_resume_structure():
         from app.agents.resume_agent import parse_resume
         from app.schemas.resume_schema import CandidateProfile, Education, Project, WorkExperience
 
-        with patch("app.agents.resume_agent.call_llm_structured") as mock:
+        with patch("app.agents.resume_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             mock.return_value = CandidateProfile(
                 candidate_id="C001",
                 name="张三",
@@ -50,7 +50,7 @@ def test_batch_parse_resumes():
         from app.agents.resume_agent import batch_parse_resumes
         from app.schemas.resume_schema import CandidateProfile
 
-        with patch("app.agents.resume_agent.call_llm_structured") as mock:
+        with patch("app.agents.resume_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             mock.return_value = CandidateProfile(
                 candidate_id="", name="测试", email="",
                 education=[], skills=["Python"], projects=[], work_experience=[],
@@ -67,7 +67,7 @@ def test_empty_resume_handling():
         from app.agents.resume_agent import parse_resume
         from app.schemas.resume_schema import CandidateProfile
 
-        with patch("app.agents.resume_agent.call_llm_structured") as mock:
+        with patch("app.agents.resume_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             mock.return_value = CandidateProfile(
                 candidate_id="", name="", email="",
                 education=[], skills=[], projects=[], work_experience=[],
@@ -93,7 +93,7 @@ def test_parse_resume_cleans_corrupted_llm_output():
 项目: HireFlowAgents AI 招聘系统
 """
 
-        with patch("app.agents.resume_agent.call_llm_structured") as mock:
+        with patch("app.agents.resume_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             mock.return_value = CandidateProfile(
                 candidate_id="C001",
                 name="\\你\\\\ud83c\\udd70",
@@ -204,7 +204,7 @@ AI 产品与应用：RAG · AI Agent · LangGraph · Workflow Design · Human-in
 后端与接口：FastAPI · Pydantic · SQL · RESTful API
 项目协作：Git/GitHub · pytest · Docker · Scrum · Jupyter Notebook"""
 
-        with patch("app.agents.resume_agent.call_llm_structured") as mock:
+        with patch("app.agents.resume_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             mock.return_value = CandidateProfile(
                 candidate_id="C001",
                 name="求职方向",
@@ -268,7 +268,7 @@ def test_personal_summary_heading_is_not_candidate_name():
 技能
 Python、FastAPI
 """
-        with patch("app.agents.resume_agent.call_llm_structured") as mock:
+        with patch("app.agents.resume_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             mock.return_value = CandidateProfile(
                 candidate_id="C001",
                 name="个人概述",

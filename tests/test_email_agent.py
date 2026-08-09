@@ -6,6 +6,7 @@ Email Agent 单元测试 (不调用真实 LLM)。
 
 import sys
 import os
+from unittest.mock import AsyncMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -19,7 +20,7 @@ def test_generate_email_draft_structure():
 
         from app.schemas.email_schema import EmailContentOutput
 
-        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+        with patch("app.agents.email_agent.call_llm_structured", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = EmailContentOutput(subject="面试邀请", body="尊敬的张三，您好")
 
             result = await generate_email_draft(
@@ -47,7 +48,7 @@ def test_generate_email_rejection_is_polite():
 
         from app.schemas.email_schema import EmailContentOutput
 
-        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+        with patch("app.agents.email_agent.call_llm_structured", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = EmailContentOutput(subject="感谢您的申请", body="我们很遗憾...")
 
             result = await generate_email_draft(
@@ -71,7 +72,7 @@ def test_generate_email_fallback():
     async def run():
         from app.agents.email_agent import generate_email_draft
 
-        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+        with patch("app.agents.email_agent.call_llm_structured", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = ValueError("无效输出")
             result = await generate_email_draft(
                 candidate_profile={"name":"张三"},
@@ -122,7 +123,7 @@ def test_invalid_email_type_rejected():
     async def run():
         from app.agents.email_agent import generate_email_draft
         from app.schemas.email_schema import EmailContentOutput
-        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+        with patch("app.agents.email_agent.call_llm_structured", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = EmailContentOutput(subject="通知", body="内容")
             result = await generate_email_draft(
                 candidate_profile={"name":"张三"},
@@ -144,7 +145,7 @@ def test_email_replaces_candidate_name_placeholder():
         from app.agents.email_agent import generate_email_draft
         from app.schemas.email_schema import EmailContentOutput
 
-        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+        with patch("app.agents.email_agent.call_llm_structured", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = EmailContentOutput(
                 subject="面试邀请",
                 body="尊敬的候选人姓名，您好：欢迎参加面试。",
@@ -175,7 +176,7 @@ def test_email_discards_flattened_dirty_model_output():
             "body | 尊敬的 候选人姓名 您好!我们很高兴您通过了初步筛查。"
             "再次感谢您的 지원! 祝好 你的名字 招聘专家"
         )
-        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+        with patch("app.agents.email_agent.call_llm_structured", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = EmailContentOutput(subject="邀请信", body=dirty_body)
             result = await generate_email_draft(
                 candidate_profile={"name": "王小明"},
@@ -203,7 +204,7 @@ def test_email_converts_literal_newlines_for_display():
         from app.agents.email_agent import generate_email_draft
         from app.schemas.email_schema import EmailContentOutput
 
-        with patch("app.agents.email_agent.call_llm_structured") as mock_llm:
+        with patch("app.agents.email_agent.call_llm_structured", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = EmailContentOutput(
                 subject="下一轮面试通知",
                 body="尊敬的番茄，您好：\\n欢迎进入下一轮面试。\\n祝好",

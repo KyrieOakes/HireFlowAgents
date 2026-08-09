@@ -19,8 +19,9 @@ Match Agent: 候选人匹配评分 Agent。
 - 风险扣分: -10 分
 """
 
-from typing import Dict, Any, List, Optional, Tuple
-from app.services.llm_service import call_llm_structured
+import asyncio
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from app.services.llm_service import call_llm_async, call_llm_structured
 from app.schemas.match_schema import MatchResult, DimensionScores
 from app.utils.config import settings
 
@@ -117,7 +118,7 @@ async def match_candidate(
 
     try:
         # 调用 LLM 进行结构化评分
-        match_result = call_llm_structured(
+        match_result = await call_llm_structured(
             system_prompt=system_prompt,
             user_message=user_message,
             output_schema=MatchResult,
@@ -325,6 +326,8 @@ async def batch_match_candidates(
     candidate_profiles: List[Dict[str, Any]],
     evidence_by_candidate: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     rubric: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[Callable[..., Awaitable[None]]] = None,
+    max_concurrency: int = 5,
 ) -> List[Dict[str, Any]]:
     """
     批量对多个候选人进行匹配评分。
@@ -337,38 +340,73 @@ async def batch_match_candidates(
     返回:
         List[dict]: 所有候选人的匹配评分结果
     """
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
+    total = len(candidate_profiles)
+    concurrency = max(1, min(max_concurrency, total or 1))
+    semaphore = asyncio.Semaphore(concurrency)
+    progress_lock = asyncio.Lock()
+    completed = 0
 
-    # 真正的并行: 用线程池执行 LLM 调用
-    # LangChain 的 async invoke() 底层是同步 HTTP, asyncio.gather 不会并行
-    # 用 ThreadPoolExecutor 实现多线程并发
-    def _sync_match(profile):
-        """同步执行单个匹配 (在线程中运行)"""
+    if progress_callback:
+        await progress_callback(
+            message=f"Match Agent 开始评分 {total} 名候选人，并发上限 {concurrency}",
+            completed=0,
+            total=total,
+        )
+
+    async def match_one(index: int, profile: Dict[str, Any]):
+        """使用真正异步的结构化 LLM 调用评分一名候选人。"""
+        nonlocal completed
         candidate_id = profile.get("candidate_id", "unknown")
+        candidate_name = str(profile.get("name") or candidate_id)
         evidence = None
         if evidence_by_candidate:
             evidence = evidence_by_candidate.get(candidate_id)
-        # 在线程中创建新的事件循环运行 async 函数
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(
-                match_candidate(
-                    jd_profile=jd_profile,
-                    candidate_profile=profile,
-                    evidence_list=evidence,
-                    rubric=rubric,
-                )
-            )
-        finally:
-            loop.close()
 
-    # 最多同时 5 个线程
-    with ThreadPoolExecutor(max_workers=min(len(candidate_profiles), 5)) as executor:
-        results = list(executor.map(_sync_match, candidate_profiles))
+        async with semaphore:
+            if progress_callback:
+                await progress_callback(
+                    message=f"Match Agent 正在评分：{candidate_name}",
+                    completed=completed,
+                    total=total,
+                    candidate_id=candidate_id,
+                    candidate_name=candidate_name,
+                )
+            result = await match_candidate(
+                jd_profile=jd_profile,
+                candidate_profile=profile,
+                evidence_list=evidence,
+                rubric=rubric,
+            )
+
+        async with progress_lock:
+            completed += 1
+            current_completed = completed
+        if progress_callback:
+            await progress_callback(
+                message=f"Match Agent 已完成：{candidate_name}（{current_completed}/{total}）",
+                completed=current_completed,
+                total=total,
+                candidate_id=candidate_id,
+                candidate_name=candidate_name,
+            )
+        return index, result
+
+    indexed_results = await asyncio.gather(
+        *(match_one(index, profile) for index, profile in enumerate(candidate_profiles))
+    )
+    # 并发完成顺序不固定，最终仍按粗排输入顺序交给后续后处理。
+    results = [result for _, result in sorted(indexed_results, key=lambda item: item[0])]
 
     # ---- 后处理: 强制翻译为中文 ----
     results = await _ensure_chinese_results(results)
+
+    if progress_callback:
+        await progress_callback(
+            status="completed",
+            message=f"Match Agent 完成 {total} 名候选人的七维评分",
+            completed=total,
+            total=total,
+        )
 
     return results
 
@@ -400,7 +438,6 @@ async def _ensure_chinese_results(
         return results
 
     # 构建批量翻译请求
-    from app.services.llm_service import call_llm
     items_text = "\n---\n".join(
         f"[{idx}:{field}] {text}"
         for idx, field, text in texts_to_translate
@@ -413,7 +450,7 @@ async def _ensure_chinese_results(
 {items_text}"""
 
     try:
-        translated = call_llm(
+        translated = await call_llm_async(
             system_prompt="你是专业翻译。只输出翻译结果, 不要解释。",
             user_message=translation_prompt,
         )

@@ -7,14 +7,14 @@ JD Agent 单元测试 (mock LLM, 不调真实 API)。
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 def test_analyze_jd_structure():
     """验证 JD 解析返回必要字段。"""
     async def run():
         from app.agents.jd_agent import analyze_jd
-        with patch("app.agents.jd_agent.call_llm_structured") as mock:
+        with patch("app.agents.jd_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             # 模拟 LLM 返回
             from app.schemas.jd_schema import JobDescription
             mock.return_value = JobDescription(
@@ -46,7 +46,7 @@ def test_analyze_jd_fallback():
     """验证 LLM 返回空字段时的处理。"""
     async def run():
         from app.agents.jd_agent import analyze_jd
-        with patch("app.agents.jd_agent.call_llm_structured") as mock:
+        with patch("app.agents.jd_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             from app.schemas.jd_schema import JobDescription
             mock.return_value = JobDescription(
                 job_title="", required_skills=[], preferred_skills=[],
@@ -85,7 +85,7 @@ ByteIntern：面向2027届毕业生（2026年9月-2027年8月期间毕业），�
 4、热爱编程，有较强的学习能力，有强烈的求知欲、好奇心和进取心；
 5、有Agent开发、Agent框架、Agent Skills等相关经验者优先。"""
 
-        with patch("app.agents.jd_agent.call_llm_structured") as mock:
+        with patch("app.agents.jd_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             # 这些值复现截图中的职位 ID、韩文、字节转义和错误年份污染。
             mock.return_value = JobDescription(
                 job_title="\\姓\\줄A31360A: AI Agent开发实习生-计算",

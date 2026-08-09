@@ -114,7 +114,7 @@ async def generate_email_draft(
 
     try:
         # 使用 Pydantic 结构化输出，防止自由文本 JSON 被压平成截图中的一长串内容。
-        structured = call_llm_structured(
+        structured = await call_llm_structured(
             system_prompt=system_prompt,
             user_message=user_message,
             output_schema=EmailContentOutput,

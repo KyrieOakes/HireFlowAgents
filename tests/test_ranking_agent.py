@@ -7,14 +7,14 @@ Ranking Agent 单元测试 (mock LLM)。
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 def test_rank_candidates_sorting():
     """验证按总分降序排列。"""
     async def run():
         from app.agents.ranking_agent import rank_candidates
-        with patch("app.agents.ranking_agent.call_llm") as mock:
+        with patch("app.agents.ranking_agent.call_llm_async", new_callable=AsyncMock) as mock:
             mock.return_value = "排名合理"
             result = await rank_candidates([
                 {"candidate_id":"C2","total_score":70,"dimension_scores":{},"strengths":[],"risks":[],"recommendation":"Medium"},
@@ -35,7 +35,7 @@ def test_recommendation_levels_in_ranking():
     import asyncio
     async def run():
         from app.agents.ranking_agent import rank_candidates
-        with patch("app.agents.ranking_agent.call_llm") as m:
+        with patch("app.agents.ranking_agent.call_llm_async", new_callable=AsyncMock) as m:
             m.return_value = "ok"
             result = await rank_candidates([
                 {"candidate_id":"C1","total_score":85,"dimension_scores":{},"strengths":[],"risks":[],"recommendation":""},
@@ -55,7 +55,7 @@ def test_ranking_summary():
     """验证汇总统计。"""
     async def run():
         from app.agents.ranking_agent import rank_candidates
-        with patch("app.agents.ranking_agent.call_llm") as mock:
+        with patch("app.agents.ranking_agent.call_llm_async", new_callable=AsyncMock) as mock:
             mock.return_value = "统计正确"
             result = await rank_candidates([
                 {"candidate_id":"C1","total_score":85,"dimension_scores":{},"strengths":[],"risks":[],"recommendation":"Strong"},

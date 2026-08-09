@@ -86,7 +86,7 @@ async def analyze_jd(jd_text: str) -> Dict[str, Any]:
 
     # 调用 LLM 进行结构化提取
     # 传入 JobDescription Pydantic 类，LLM 会按这个格式输出
-    jd_profile = call_llm_structured(
+    jd_profile = await call_llm_structured(
         system_prompt=system_prompt,
         user_message=f"请分析以下岗位描述:\n\n{jd_text}",
         output_schema=JobDescription,

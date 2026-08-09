@@ -7,7 +7,7 @@ Match Agent 单元测试 (mock LLM)。
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 def test_match_candidate_structure():
@@ -16,7 +16,7 @@ def test_match_candidate_structure():
         from app.agents.match_agent import match_candidate
         from app.schemas.match_schema import MatchResult, DimensionScores
 
-        with patch("app.agents.match_agent.call_llm_structured") as mock:
+        with patch("app.agents.match_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             mock.return_value = MatchResult(
                 candidate_id="C001",
                 total_score=85.0,
@@ -60,7 +60,7 @@ def test_batch_match():
         from app.agents.match_agent import batch_match_candidates
         from app.schemas.match_schema import MatchResult, DimensionScores
 
-        with patch("app.agents.match_agent.call_llm_structured") as mock:
+        with patch("app.agents.match_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             mock.return_value = MatchResult(
                 candidate_id="C1", total_score=80.0,
                 dimension_scores=DimensionScores(technical_skills=25,project_relevance=15,experience=10,education=8,domain_relevance=7,communication=4,risk_penalty=0),
@@ -79,7 +79,7 @@ def test_match_candidate_fallback_when_llm_output_is_truncated():
     async def run():
         from app.agents.match_agent import match_candidate
 
-        with patch("app.agents.match_agent.call_llm_structured") as mock:
+        with patch("app.agents.match_agent.call_llm_structured", new_callable=AsyncMock) as mock:
             mock.side_effect = Exception("LengthFinishReasonError: response content reached length limit")
             result = await match_candidate(
                 jd_profile={

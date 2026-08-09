@@ -6,6 +6,7 @@ Evaluation Agent 单元测试 (不调用真实 LLM)。
 
 import sys
 import os
+from unittest.mock import AsyncMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -19,7 +20,7 @@ def test_evaluate_candidate_mock():
 
         from app.schemas.evaluation_schema import InterviewEvaluationOutput, RiskResolution
 
-        with patch("app.agents.evaluation_agent.call_llm_structured") as mock_llm:
+        with patch("app.agents.evaluation_agent.call_llm_structured", new_callable=AsyncMock) as mock_llm:
             # 模拟结构化 LLM 返回，测试 Pydantic 数据能完整流入 API。
             mock_llm.return_value = InterviewEvaluationOutput(
                 technical_depth_score=8,
@@ -59,7 +60,7 @@ def test_evaluate_candidate_fallback():
     async def run():
         from app.agents.evaluation_agent import evaluate_candidate
 
-        with patch("app.agents.evaluation_agent.call_llm_structured") as mock_llm:
+        with patch("app.agents.evaluation_agent.call_llm_structured", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = ValueError("无效结构化输出")
 
             result = await evaluate_candidate(

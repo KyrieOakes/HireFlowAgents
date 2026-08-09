@@ -14,6 +14,8 @@ import type {
   InterviewEvaluation,
   EmailDraft,
   WorkflowResponse,
+  WorkflowStartResponse,
+  WorkflowProgressEvent,
   WorkflowResumeAction,
 } from "@/types";
 
@@ -142,10 +144,66 @@ export async function updateCandidateName(
 export async function startMatchingWorkflow(
   jobId: string,
   limit: number = 0,
-): Promise<WorkflowResponse> {
+): Promise<WorkflowStartResponse> {
   return request("/workflow/run", {
     method: "POST",
     body: JSON.stringify({ job_id: jobId, limit }),
+  });
+}
+
+/**
+ * 订阅一次后台匹配任务的 SSE：progress 事件实时更新页面，result 事件结束 Promise。
+ * EventSource 会在短暂断网时按浏览器标准自动重连，后端则会回放尚未接收的事件。
+ */
+export function streamMatchingWorkflow(
+  threadId: string,
+  onProgress: (event: WorkflowProgressEvent) => void,
+  signal?: AbortSignal,
+): Promise<WorkflowResponse> {
+  return new Promise((resolve, reject) => {
+    const source = new EventSource(`${BASE_URL}/workflow/${threadId}/events`);
+    let settled = false;
+
+    const close = () => {
+      source.close();
+      signal?.removeEventListener("abort", handleAbort);
+    };
+
+    const handleAbort = () => {
+      if (settled) return;
+      settled = true;
+      close();
+      reject(new DOMException("匹配进度订阅已取消", "AbortError"));
+    };
+
+    source.onmessage = (message) => {
+      try {
+        const event = JSON.parse(message.data);
+        if (event.type === "progress") {
+          onProgress(event as WorkflowProgressEvent);
+          return;
+        }
+        if (event.type === "result") {
+          settled = true;
+          close();
+          resolve(event.response as WorkflowResponse);
+        }
+      } catch {
+        // 单条格式异常不能关闭整个流；后续事件仍可能包含最终结果。
+      }
+    };
+
+    source.onerror = () => {
+      // CONNECTING 表示浏览器正在自动重连；只有明确 CLOSED 才交给页面报错。
+      if (!settled && source.readyState === EventSource.CLOSED) {
+        settled = true;
+        close();
+        reject(new Error("实时进度连接已关闭，请尝试恢复该任务"));
+      }
+    };
+
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    if (signal?.aborted) handleAbort();
   });
 }
 
@@ -155,7 +213,7 @@ export async function resumeMatchingWorkflow(
   action: WorkflowResumeAction,
   selectedCandidateIds: string[] = [],
   comment: string = "",
-): Promise<WorkflowResponse> {
+): Promise<WorkflowStartResponse> {
   return request(`/workflow/${threadId}/resume`, {
     method: "POST",
     body: JSON.stringify({

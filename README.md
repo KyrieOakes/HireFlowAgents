@@ -4,7 +4,8 @@
 确定性 Workflow，在证据检索环节嵌入受控 ReAct Agent，通过原生 Tool Calling
 动态查询候选人简历，并在证据故障与最终排名两个节点进入 Human-in-the-loop。
 当前前端的匹配执行只有 `/workflow/run` 一个入口，工作流状态通过 PostgreSQL
-checkpoint 持久化，可跨请求中断和恢复。
+checkpoint 持久化，可跨请求中断和恢复。耗时匹配由后台任务执行，浏览器通过
+Server-Sent Events 接收真实阶段和候选人级进度。
 
 ## 项目简介
 
@@ -17,6 +18,9 @@ HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → LangGraph 粗
 - 分层容错: 临时错误指数退避、非法参数由 Agent 修正、安全错误立即阻断
 - Agent 人工兜底: 重试 / 带警告继续 / 跳过失败候选人 / 终止本轮
 - 两阶段排序: 关键词召回 `max(3N, 15)` 人，整池完成证据检索与 LLM 评分后再返回 Top N
+- 实时进度: POST 立即返回 thread_id，SSE 推送粗排、索引、Evidence、Match、Ranking 进度
+- 真异步 LLM: 结构化输出使用 `ainvoke()`，Match 由 `asyncio.Semaphore(5)` 有界并发
+- Evidence 有界并发: 默认同时处理 2 人，可通过环境变量调节并保护本地 LM Studio
 - RAG 证据检索 (简历向量化 + Qdrant 语义搜索)
 - LangGraph 单一匹配入口: `/workflow/run`，不保留旧的直连 Agent 编排路由
 - 双层 Human-in-the-loop: `interrupt()` + `Command(resume=...)`
@@ -25,7 +29,7 @@ HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → LangGraph 粗
 - PDF/DOCX 文件上传 + 自动解析 + 自动命名
 - 前端产品化体验: 毛玻璃工作台、岗位/候选人内联改名、Portal 详情弹窗、局部 loading、连续解析
 - LLM 稳定性兜底: 简历语义错位修复、匹配输出截断兜底评分
-- 82 个测试 (0 failures)，覆盖两阶段精排、interrupt/resume、reject 循环和旧路由删除
+- 85 个测试 (0 failures)，覆盖 SSE 事件、有界并发、两阶段精排和 interrupt/resume
 - Next.js 前端 (HR/ATS 工作台风格)
 
 ## 快速开始
@@ -79,7 +83,7 @@ python run_eval.py                          # 自动化脚本
 ### 7. 测试
 
 ```bash
-pytest tests/                               # 82 tests
+pytest tests/                               # 85 tests
 pytest tests/ -v                            # 详细
 ```
 
@@ -106,6 +110,12 @@ HireFlow 没有让一个 Supervisor Agent 自由控制整个招聘过程。岗�
 ```text
 /workflow/run
       |
+      | 202 Accepted: 立即返回 thread_id
+      v
+FastAPI 后台任务 --------------------> SSE /workflow/{thread_id}/events
+      |                                      |
+      |                                      v
+      |                              前端实时阶段进度条
       v
 读取 PostgreSQL 已解析 JD/候选人 --> 关键词召回池 max(3N, 15) --> 构建 initial state
                                                                    |
@@ -141,6 +151,11 @@ JD Agent(复用画像) --> Resume Agent(复用画像) --> Resume Validation
 每次启动都会生成唯一 `thread_id`。`AsyncPostgresSaver` 在节点执行后保存 checkpoint；
 前端保存 thread ID，可通过状态接口恢复证据审核或排名审核现场。审核完成后，页面只
 展示最终入选候选人，未入选者不会解锁面试操作。
+
+选择岗位时，如果浏览器保存了旧 thread，页面不会再自动灌入旧排名，而是显示
+“恢复上次任务 / 开始新匹配”。新匹配只更新浏览器关联，不删除 PostgreSQL 历史
+checkpoint。匹配运行期间，SSE 真实展示读取数据、关键词粗排、逐人索引检查、
+Evidence、Match 和 Ranking；刷新后仍可使用 thread_id 主动恢复。
 
 两阶段排序中的 `N` 是 HR 选择的最终返回人数。例如选择 Top 5 时，关键词规则先从
 全部已解析候选人中召回 `max(5 × 3, 15) = 15` 人；这 15 人全部经过 Evidence ReAct
@@ -203,7 +218,8 @@ JD Agent(复用画像) --> Resume Agent(复用画像) --> Resume Validation
 ### 工作流
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/workflow/run` | 传入 `job_id`/`limit`，启动唯一匹配工作流 |
+| `POST` | `/workflow/run` | 传入 `job_id`/`limit`，返回 202 + thread_id 并启动后台工作流 |
+| `GET` | `/workflow/{thread_id}/events` | SSE 回放并推送真实阶段进度和最终响应 |
 | `POST` | `/workflow/{thread_id}/resume` | 提交人工选择并从 interrupt 恢复 |
 | `GET` | `/workflow/{thread_id}/state` | 从 PostgreSQL checkpoint 查询状态 |
 
@@ -218,7 +234,7 @@ JD Agent(复用画像) --> Resume Agent(复用画像) --> Resume Validation
 | 数据库 | PostgreSQL 16 (业务数据 + LangGraph checkpoint) |
 | 向量库 | Qdrant |
 | 前端 | Next.js 14 + TypeScript + Tailwind CSS |
-| 测试 | pytest (82 tests), SQLite/InMemorySaver, FastAPI TestClient |
+| 测试 | pytest (85 tests), SQLite/InMemorySaver, FastAPI TestClient |
 | 配置 | Pydantic Settings + .env |
 | 部署 | Docker Compose |
 
@@ -238,7 +254,7 @@ HireFlowAgents/
 │   └── utils/                # config + logger
 ├── frontend/                 # Next.js (4 页面)
 ├── evaluation/               # Notebook + 评估脚本 + reports
-├── tests/                    # 82 tests (Agent/HITL/两阶段精排/Tool重试/安全/RAG/CRUD/API/E2E)
+├── tests/                    # 85 tests (Agent/HITL/SSE/异步并发/两阶段精排/安全/RAG/API/E2E)
 ├── data/                     # 测试数据
 ├── logs/                     # 项目文档 + 开发日志
 ├── Dockerfile
@@ -260,8 +276,9 @@ HireFlowAgents/
 ## 稳定性设计
 
 - Resume Agent: 姓名、邮箱、电话、教育、项目、技能优先从原文规则解析，LLM 输出作为补充，避免章节标题或乱码进入画像。
-- Match Agent: 对关键词召回池中的全部候选人执行七维 LLM 评分，最多 5 个线程并发；prompt 自动截断，输出强制简洁；单个候选人失败时返回规则兜底评分，不让整批精排失败。
+- Match Agent: `call_llm_structured()` 使用真正异步 `ainvoke()`；召回池由 `asyncio.Semaphore(5)` 有界并发执行七维评分，不再为每名候选人创建线程和事件循环；单人失败仍返回规则兜底评分。
 - Evidence Agent: 最大 3 轮、6 次 Tool Call；候选人 ID 由可信运行时注入，常见本地模型参数别名先规范化；临时错误指数退避，不可兼容参数允许模型修正两次，重试耗尽后进入人工选择。
+- Evidence 批处理: 默认并发 2 人并保持粗排输入顺序；每完成一人立即发布真实进度，避免串行处理 15 人，同时控制本地模型显存与请求压力。
 - RAG 索引健康检查: 匹配前检查每位候选人的 Qdrant 向量；缺失时从 PostgreSQL 简历原文自动重建，重建失败明确提示服务配置，不再误报“证据不足”。
 - Qdrant 写入: Embedding 由 OpenAI 兼容接口生成后直接使用 QdrantClient upsert，不构造新版已禁止的 `embedding=None` LangChain 包装对象。
 - Agent 审计: 保存 Tool Call、Observation 摘要、尝试次数、耗时、覆盖率和停止原因，不记录隐藏 CoT。
@@ -271,6 +288,8 @@ HireFlowAgents/
 - 人工命名: 岗位和候选人都支持卡片内联改名，并同步结构化画像；重新解析不会覆盖人工岗位名。
 - 详情弹层: Agent 轨迹点击后在大弹窗展示；详细评分使用 React Portal 脱离页面动画定位上下文，打开时始终从弹窗顶部开始并只滚动弹窗内容。
 - 人审结果: 审核期间展示完整排名供 HR 比较；确认后只保留最终面试名单，其他候选人隐藏且无法进入面试流程。
+- 后台进度: `/workflow/run` 和 `/resume` 都先返回轻量任务信息，再通过 SSE 推送真实进度；事件支持回放、心跳和 Last-Event-ID 断线续传。
+- 历史任务: 选择岗位时不自动恢复旧结果，必须由用户明确选择恢复 checkpoint 或创建新 thread。
 
 ## 常用命令
 
