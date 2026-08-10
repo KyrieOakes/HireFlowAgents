@@ -37,7 +37,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {/* 导航链接 */}
           <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
             {NAV_ITEMS.map((item) => {
-              const isActive = router.pathname === item.href;
+              // 独立面试工作台仍然属于“匹配与面试”业务域，导航栏应保持该入口高亮。
+              const isActive = router.pathname === item.href
+                || (item.href === "/matching" && router.pathname.startsWith("/interviews/"));
               return (
                 <Link
                   key={item.href}

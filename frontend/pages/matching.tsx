@@ -1,16 +1,14 @@
 // ================================================================
-// 匹配排名页 — 选择岗位 → 触发匹配 → 展示排名 + 详情
+// 匹配排名页 — 选择岗位 → 触发匹配 → 人工确认名单 → 进入独立面试工作台
 // ================================================================
 
 import { useEffect, useState, useRef } from "react";
+import { useRouter } from "next/router";
 import type {
   AgentInterventionAction,
   Candidate,
-  EmailDraft,
   EvidenceAgentRun,
   EvidenceIntervention,
-  InterviewEvaluation,
-  InterviewQuestion,
   Job,
   MatchDetail,
   RankedCandidate,
@@ -26,11 +24,6 @@ import {
   resumeMatchingWorkflow,
   getMatchingWorkflowState,
   getMatchDetail,
-  generateInterviewQuestions,
-  submitInterviewEvaluation,
-  createEmailDraft,
-  getEmailDrafts,
-  approveEmailDraft,
 } from "@/services/api";
 import LoadingButton from "@/components/LoadingButton";
 import ErrorMessage from "@/components/ErrorMessage";
@@ -52,6 +45,7 @@ const PROGRESS_PHASE_LABELS: Record<string, string> = {
 };
 
 export default function MatchingPage() {
+  const router = useRouter();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,13 +63,8 @@ export default function MatchingPage() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   // 切换岗位或组件卸载时关闭旧 SSE，避免不同任务的事件写进同一个页面。
   const progressAbortRef = useRef<AbortController | null>(null);
-  const [selectedCandidateId, setSelectedCandidateId] = useState("");
-  const [questions, setQuestions] = useState<InterviewQuestion[]>([]);
-  const [evaluation, setEvaluation] = useState<InterviewEvaluation | null>(null);
-  const [drafts, setDrafts] = useState<EmailDraft[]>([]);
-  const [feedback, setFeedback] = useState("");
-  const [emailType, setEmailType] = useState<"interview_invite" | "rejection" | "follow_up" | "next_round">("interview_invite");
-  const [stageLoading, setStageLoading] = useState<Record<string, boolean>>({});
+  // 从面试工作台返回时只恢复 URL 明确指定的任务，不能把普通进页面误判为恢复历史缓存。
+  const returnRestoreHandledRef = useRef(false);
   // Evidence Agent 的执行轨迹与人工介入状态会直接显示在匹配结果上方。
   const [agentRuns, setAgentRuns] = useState<EvidenceAgentRun[]>([]);
   const [agentInterventions, setAgentInterventions] = useState<EvidenceIntervention[]>([]);
@@ -91,6 +80,10 @@ export default function MatchingPage() {
   // 选择岗位后只提示存在旧任务，由用户明确决定恢复还是开始新匹配。
   const [savedWorkflowThreadId, setSavedWorkflowThreadId] = useState("");
   const [workflowProgress, setWorkflowProgress] = useState<WorkflowProgressEvent | null>(null);
+
+  // 动态路由参数可能是 string[]；这里只接受单个字符串，避免把错误参数传给后端。
+  const returnJobId = typeof router.query.returnJobId === "string" ? router.query.returnJobId : "";
+  const returnThreadId = typeof router.query.returnThreadId === "string" ? router.query.returnThreadId : "";
 
   // candidate_id → name 映射表 (用于显示姓名而非ID)
   const nameMap: Record<string, string> = {};
@@ -116,6 +109,13 @@ export default function MatchingPage() {
     })();
   }, []);
 
+  // 用户点击工作台里的“返回面试名单”时，自动选回原岗位。
+  // 这个行为依赖显式 URL 参数，不影响用户从导航栏新进入页面时的空白状态。
+  useEffect(() => {
+    if (!router.isReady || !returnJobId || !returnThreadId || returnRestoreHandledRef.current) return;
+    setSelectedJobId(returnJobId);
+  }, [router.isReady, returnJobId, returnThreadId]);
+
   // 用户切换岗位时清空当前展示；发现历史 thread_id 只显示选择框，不自动灌入旧排名。
   useEffect(() => {
     progressAbortRef.current?.abort();
@@ -127,9 +127,21 @@ export default function MatchingPage() {
       setSavedWorkflowThreadId("");
       return;
     }
+    // 只有从独立面试工作台返回时才自动恢复本轮名单，保持返回动作的上下文连续性。
+    if (
+      returnJobId === selectedJobId
+      && returnThreadId
+      && !returnRestoreHandledRef.current
+    ) {
+      returnRestoreHandledRef.current = true;
+      setSavedWorkflowThreadId("");
+      void restoreWorkflowById(returnThreadId, selectedJobId);
+      return;
+    }
+
     const savedThreadId = window.localStorage.getItem(`hireflow-workflow:${selectedJobId}`) || "";
     setSavedWorkflowThreadId(savedThreadId);
-  }, [selectedJobId]);
+  }, [selectedJobId, returnJobId, returnThreadId]);
 
   // 离开页面时关闭计时器和 SSE；后端任务仍可继续并保存 checkpoint。
   useEffect(() => () => {
@@ -137,7 +149,7 @@ export default function MatchingPage() {
     if (timerRef.current) clearInterval(timerRef.current);
   }, []);
 
-  /** 清空某个岗位之前显示的排名、Agent 轨迹和后续面试内容。 */
+  /** 清空某个岗位之前显示的排名和 Agent 轨迹。 */
   function resetWorkflowDisplay() {
     setRanked([]);
     setAgentRuns([]);
@@ -149,11 +161,6 @@ export default function MatchingPage() {
     setDefaultShortlistIds([]);
     setPipelineStats({ prescreened: 0, llmScored: 0, returned: 0 });
     setWorkflowProgress(null);
-    setSelectedCandidateId("");
-    setQuestions([]);
-    setEvaluation(null);
-    setDrafts([]);
-    setFeedback("");
   }
 
   /** 把启动、恢复、状态查询的统一响应同步到页面。 */
@@ -178,11 +185,6 @@ export default function MatchingPage() {
         response.selected_candidate_ids?.length
           ? response.selected_candidate_ids
           : shortlist,
-      );
-      setSelectedCandidateId(
-        response.selected_candidate_ids?.[0]
-          || ranking.ranked_candidates[0]?.candidate_id
-          || "",
       );
     }
 
@@ -240,25 +242,28 @@ export default function MatchingPage() {
     }
   }
 
-  /** 用户明确选择“恢复上次任务”后，才读取 checkpoint 或重新订阅正在运行的 SSE。 */
-  async function handleRestoreWorkflow() {
-    if (!savedWorkflowThreadId || matchLock.current) return;
+  /**
+   * 按 thread_id 恢复一次任务。
+   * jobId 参数用于清理失效的本地记录，既支持页面按钮，也支持从面试工作台返回。
+   */
+  async function restoreWorkflowById(threadId: string, jobId: string) {
+    if (!threadId || matchLock.current) return;
     beginWorkflowRequest();
     try {
-      const response = await getMatchingWorkflowState(savedWorkflowThreadId);
+      const response = await getMatchingWorkflowState(threadId);
       if (response.status === "not_found") {
-        window.localStorage.removeItem(`hireflow-workflow:${selectedJobId}`);
+        window.localStorage.removeItem(`hireflow-workflow:${jobId}`);
         setSavedWorkflowThreadId("");
         throw new Error("上次任务已经不存在，请开始新匹配");
       }
 
-      setWorkflowThreadId(savedWorkflowThreadId);
+      setWorkflowThreadId(threadId);
       if (response.progress) setWorkflowProgress(response.progress);
       if (response.status === "queued" || response.status === "running") {
         const controller = new AbortController();
         progressAbortRef.current = controller;
         const finalResponse = await streamMatchingWorkflow(
-          savedWorkflowThreadId,
+          threadId,
           setWorkflowProgress,
           controller.signal,
         );
@@ -273,6 +278,11 @@ export default function MatchingPage() {
       progressAbortRef.current = null;
       finishWorkflowRequest();
     }
+  }
+
+  /** 用户明确选择“恢复上次任务”后，才读取 checkpoint 或重新订阅正在运行的 SSE。 */
+  async function handleRestoreWorkflow() {
+    await restoreWorkflowById(savedWorkflowThreadId, selectedJobId);
   }
 
   /** 放弃页面关联的旧 thread_id，但保留 PostgreSQL 历史记录并启动全新任务。 */
@@ -330,52 +340,6 @@ export default function MatchingPage() {
         ? current.filter((id) => id !== candidateId)
         : [...current, candidateId],
     );
-  }
-
-  async function withStageLoading(key: string, action: () => Promise<void>) {
-    setStageLoading((prev) => ({ ...prev, [key]: true }));
-    setError(null);
-    try {
-      await action();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setStageLoading((prev) => ({ ...prev, [key]: false }));
-    }
-  }
-
-  async function handleGenerateQuestions() {
-    if (!selectedJobId || !selectedCandidateId) return;
-    await withStageLoading("questions", async () => {
-      const res = await generateInterviewQuestions(selectedJobId, selectedCandidateId);
-      setQuestions(res.questions);
-    });
-  }
-
-  async function handleSubmitEvaluation() {
-    if (!selectedJobId || !selectedCandidateId || !feedback.trim()) return;
-    await withStageLoading("evaluation", async () => {
-      const res = await submitInterviewEvaluation(selectedJobId, selectedCandidateId, feedback.trim());
-      setEvaluation(res.evaluation);
-    });
-  }
-
-  async function handleCreateDraft() {
-    if (!selectedJobId || !selectedCandidateId) return;
-    await withStageLoading("draft", async () => {
-      await createEmailDraft(selectedJobId, selectedCandidateId, emailType);
-      const res = await getEmailDrafts(selectedJobId, selectedCandidateId);
-      setDrafts(res.drafts);
-    });
-  }
-
-  async function handleApproveDraft(emailId: string) {
-    if (!selectedJobId || !selectedCandidateId) return;
-    await withStageLoading(`approve-${emailId}`, async () => {
-      await approveEmailDraft(emailId);
-      const res = await getEmailDrafts(selectedJobId, selectedCandidateId);
-      setDrafts(res.drafts);
-    });
   }
 
   // 查看候选人详情 (防抖锁)
@@ -595,13 +559,11 @@ export default function MatchingPage() {
             </h2>
             <span className="text-xs text-slate-400">人工确认后，仅入选候选人可以进入面试跟进</span>
           </div>
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-            <div className="space-y-4">
+          <div className="space-y-4">
             {visibleRanked.map((c, i) => (
               <div
                 key={c.candidate_id}
-                className={`focus-card cursor-pointer p-4 ${selectedCandidateId === c.candidate_id ? "border-sky-300 ring-2 ring-sky-100" : ""}`}
-                onClick={() => setSelectedCandidateId(c.candidate_id)}
+                className="focus-card p-4"
               >
                 {/* 头部: 排名 + ID + 分数 + 等级 */}
                 <div className="flex items-center justify-between mb-3">
@@ -629,7 +591,7 @@ export default function MatchingPage() {
                           onChange={() => toggleReviewCandidate(c.candidate_id)}
                           className="h-4 w-4 rounded border-slate-300 text-slate-950"
                         />
-                        进入面试
+                        加入面试名单
                       </label>
                     )}
                     <span className="text-lg font-bold text-slate-900">{c.total_score}<span className="text-sm font-normal text-slate-400">/100</span></span>
@@ -666,8 +628,14 @@ export default function MatchingPage() {
                   </div>
                 </div>
 
-                {/* 查看详情按钮 */}
-                <div className="mt-3 text-right">
+                {/* 每个动作都使用独立按钮，避免点击整张卡片后页面在未知位置发生变化。 */}
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                  <p className="text-xs leading-5 text-slate-500">
+                    {workflowStatus === "completed"
+                      ? "名单已确认，可以进入该候选人的独立面试流程。"
+                      : "确认最终面试名单后，才会开放面试工作台。"}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
                   <LoadingButton
                     onClick={() => handleDetail(c.candidate_id)}
                     loading={detailLoading && detailId === c.candidate_id}
@@ -675,37 +643,29 @@ export default function MatchingPage() {
                   >
                     详细评分
                   </LoadingButton>
+                    {workflowStatus === "completed" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void router.push({
+                            pathname: "/interviews/[jobId]/[candidateId]",
+                            query: {
+                              jobId: selectedJobId,
+                              candidateId: c.candidate_id,
+                              returnThreadId: workflowThreadId,
+                            },
+                          });
+                        }}
+                        className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-800 active:translate-y-0"
+                      >
+                        进入面试工作台
+                        <span aria-hidden="true">→</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
-            </div>
-            {workflowStatus === "completed" && reviewCandidateIds.includes(selectedCandidateId) ? (
-              <InterviewPanel
-                candidateId={selectedCandidateId}
-                candidateName={nameMap[selectedCandidateId] || selectedCandidateId}
-                questions={questions}
-                evaluation={evaluation}
-                drafts={drafts}
-                feedback={feedback}
-                emailType={emailType}
-                loading={stageLoading}
-                onFeedbackChange={setFeedback}
-                onEmailTypeChange={setEmailType}
-                onGenerateQuestions={handleGenerateQuestions}
-                onSubmitEvaluation={handleSubmitEvaluation}
-                onCreateDraft={handleCreateDraft}
-                onApproveDraft={handleApproveDraft}
-              />
-            ) : (
-              <aside className="focus-card h-fit p-5 text-sm text-slate-500">
-                <p className="font-semibold text-slate-900">面试流程尚未解锁</p>
-                <p className="mt-2 leading-6">
-                  {workflowStatus === "completed"
-                    ? "当前候选人不在人工确认的面试名单中，请选择一名已入选候选人。"
-                    : "请先完成人工排名审核。系统不会在 HR 确认前自动推进招聘决定。"}
-                </p>
-              </aside>
-            )}
           </div>
         </>
       )}
@@ -780,175 +740,6 @@ export default function MatchingPage() {
       </Modal>
     </div>
   );
-}
-
-function InterviewPanel({
-  candidateId,
-  candidateName,
-  questions,
-  evaluation,
-  drafts,
-  feedback,
-  emailType,
-  loading,
-  onFeedbackChange,
-  onEmailTypeChange,
-  onGenerateQuestions,
-  onSubmitEvaluation,
-  onCreateDraft,
-  onApproveDraft,
-}: {
-  candidateId: string;
-  candidateName: string;
-  questions: InterviewQuestion[];
-  evaluation: InterviewEvaluation | null;
-  drafts: EmailDraft[];
-  feedback: string;
-  emailType: "interview_invite" | "rejection" | "follow_up" | "next_round";
-  loading: Record<string, boolean>;
-  onFeedbackChange: (value: string) => void;
-  onEmailTypeChange: (value: "interview_invite" | "rejection" | "follow_up" | "next_round") => void;
-  onGenerateQuestions: () => void;
-  onSubmitEvaluation: () => void;
-  onCreateDraft: () => void;
-  onApproveDraft: (emailId: string) => void;
-}) {
-  if (!candidateId) {
-    return (
-      <div className="glass-pad h-fit">
-        <p className="section-label">面试跟进</p>
-        <h3 className="mt-2 text-lg font-semibold text-slate-900">选择候选人</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-500">
-          匹配完成后，点击左侧候选人即可生成面试问题、提交反馈并创建邮件草稿。
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <aside className="glass-pad sticky top-24 h-fit space-y-5">
-      <div>
-        <p className="section-label">面试跟进</p>
-        <h3 className="mt-2 text-lg font-semibold text-slate-950">{candidateName}</h3>
-        <p className="mt-1 text-xs text-slate-400">{candidateId}</p>
-      </div>
-
-      <div className="rounded-lg border border-slate-200 bg-white/70 p-4 backdrop-blur">
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <h4 className="text-sm font-semibold text-slate-900">面试问题</h4>
-            <p className="mt-1 text-xs text-slate-500">围绕技术、项目和风险点生成问题。</p>
-          </div>
-          <LoadingButton onClick={onGenerateQuestions} loading={!!loading.questions} variant="secondary">
-            生成
-          </LoadingButton>
-        </div>
-        {questions.length > 0 ? (
-          <div className="space-y-2">
-            {questions.map((q) => (
-              <div key={q.question_id || q.question} className="rounded-md bg-slate-50 p-3">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="chip-blue">{questionTypeLabel(q.question_type)}</span>
-                </div>
-                <p className="text-sm font-medium leading-6 text-slate-800">{q.question}</p>
-                <p className="mt-1 text-xs leading-5 text-slate-500">{q.purpose}</p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="rounded-md bg-slate-50 p-3 text-sm text-slate-500">还没有生成面试问题。</p>
-        )}
-      </div>
-
-      <div className="rounded-lg border border-slate-200 bg-white/70 p-4 backdrop-blur">
-        <h4 className="text-sm font-semibold text-slate-900">面试评价</h4>
-        <textarea
-          value={feedback}
-          onChange={(e) => onFeedbackChange(e.target.value)}
-          rows={5}
-          className="field mt-3 resize-y"
-          placeholder="填写面试官反馈，例如技术回答、沟通表现、风险点是否澄清..."
-        />
-        <div className="mt-3">
-          <LoadingButton onClick={onSubmitEvaluation} loading={!!loading.evaluation} disabled={!feedback.trim()}>
-            生成评价
-          </LoadingButton>
-        </div>
-        {evaluation && (
-          <div className="mt-4 rounded-md bg-slate-50 p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-sm font-semibold text-slate-900">{evaluation.recommendation}</span>
-              {evaluation.requires_human_review && <span className="chip">需人工审核</span>}
-            </div>
-            <p className="text-sm leading-6 text-slate-600">{evaluation.summary}</p>
-            {evaluation.concerns?.length > 0 && (
-              <div className="mt-3">
-                <p className="mb-1 text-xs font-semibold text-rose-700">关注点</p>
-                <ul className="space-y-1 text-xs text-slate-600">
-                  {evaluation.concerns.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-lg border border-slate-200 bg-white/70 p-4 backdrop-blur">
-        <h4 className="text-sm font-semibold text-slate-900">邮件草稿</h4>
-        <div className="mt-3 flex gap-2">
-          <select
-            value={emailType}
-            onChange={(e) => onEmailTypeChange(e.target.value as any)}
-            className="field"
-          >
-            <option value="interview_invite">面试邀请</option>
-            <option value="next_round">下一轮通知</option>
-            <option value="follow_up">跟进邮件</option>
-            <option value="rejection">拒信</option>
-          </select>
-          <LoadingButton onClick={onCreateDraft} loading={!!loading.draft}>
-            生成
-          </LoadingButton>
-        </div>
-        {drafts.length > 0 ? (
-          <div className="mt-3 space-y-3">
-            {drafts.map((draft) => (
-              <div key={draft.email_id} className="rounded-md bg-slate-50 p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-slate-900">{draft.subject}</span>
-                  <span className={draft.status === "approved" ? "chip-green" : "chip"}>{draft.status}</span>
-                </div>
-                <pre className="max-h-36 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-600">{draft.body}</pre>
-                {draft.status !== "approved" && (
-                  <div className="mt-3">
-                    <LoadingButton
-                      onClick={() => onApproveDraft(draft.email_id)}
-                      loading={!!loading[`approve-${draft.email_id}`]}
-                      variant="secondary"
-                    >
-                      批准草稿
-                    </LoadingButton>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm text-slate-500">还没有邮件草稿。</p>
-        )}
-      </div>
-    </aside>
-  );
-}
-
-function questionTypeLabel(type: string): string {
-  const map: Record<string, string> = {
-    technical: "技术",
-    project_deep_dive: "项目深挖",
-    behavioral: "行为",
-    risk_verification: "风险验证",
-  };
-  return map[type] || type;
 }
 
 /** 维度字段 → 中文 */
