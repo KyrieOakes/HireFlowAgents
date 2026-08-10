@@ -5,7 +5,9 @@
 动态查询候选人简历，并在证据故障与最终排名两个节点进入 Human-in-the-loop。
 当前前端的匹配执行只有 `/workflow/run` 一个入口，工作流状态通过 PostgreSQL
 checkpoint 持久化，可跨请求中断和恢复。耗时匹配由后台任务执行，浏览器通过
-Server-Sent Events 接收真实阶段和候选人级进度。
+Server-Sent Events 接收真实阶段和候选人级进度。HR 确认最终名单后，每位入选
+候选人通过独立面试工作台继续生成问题、记录评价和处理邮件草稿，避免把排名与
+面试操作挤在同一个响应式页面中。
 
 ## 项目简介
 
@@ -27,7 +29,9 @@ HireFlow 模拟完整招聘流程：JD 分析 → 简历解析 → LangGraph 粗
 - 唯一 `thread_id` + `AsyncPostgresSaver`，页面刷新后可恢复 checkpoint
 - LLM 本地/云端双模式 (一键切换)
 - PDF/DOCX 文件上传 + 自动解析 + 自动命名
-- 前端产品化体验: 毛玻璃工作台、岗位/候选人内联改名、Portal 详情弹窗、局部 loading、连续解析
+- 前端产品化体验: 岗位/候选人内联改名、Portal 详情弹窗、局部 loading、连续解析
+- 独立面试工作台: 每位入选候选人使用专属动态路由，按“问题 → 评价 → 邮件”分步跟进
+- 上下文返回: 从面试工作台返回名单页时，使用显式 job/thread 参数恢复本轮结果，不误加载其他历史任务
 - LLM 稳定性兜底: 简历语义错位修复、匹配输出截断兜底评分
 - 85 个测试 (0 failures)，覆盖 SSE 事件、有界并发、两阶段精排和 interrupt/resume
 - Next.js 前端 (HR/ATS 工作台风格)
@@ -146,16 +150,28 @@ JD Agent(复用画像) --> Resume Agent(复用画像) --> Resume Validation
                                                 |
                                                 v
                                                END
+                                                |
+                                                v
+                             候选人独立面试工作台（主匹配图之外）
+                                                |
+                    Interview API --> Evaluation API --> Email Draft API
 ```
 
 每次启动都会生成唯一 `thread_id`。`AsyncPostgresSaver` 在节点执行后保存 checkpoint；
 前端保存 thread ID，可通过状态接口恢复证据审核或排名审核现场。审核完成后，页面只
-展示最终入选候选人，未入选者不会解锁面试操作。
+展示最终入选候选人，未入选者不会解锁面试操作。每张入选候选人卡片提供独立的
+“进入面试工作台”按钮，路由为 `/interviews/{jobId}/{candidateId}`；面试问题、
+面试官反馈、结构化评价和邮件草稿都在候选人上下文内展示，不再根据屏幕宽度把
+面试面板放到排名右侧或页面底部。
 
 选择岗位时，如果浏览器保存了旧 thread，页面不会再自动灌入旧排名，而是显示
 “恢复上次任务 / 开始新匹配”。新匹配只更新浏览器关联，不删除 PostgreSQL 历史
 checkpoint。匹配运行期间，SSE 真实展示读取数据、关键词粗排、逐人索引检查、
 Evidence、Match 和 Ranking；刷新后仍可使用 thread_id 主动恢复。
+
+从独立工作台返回时会携带明确的 `returnJobId` 和 `returnThreadId`，名单页只在这个
+显式返回场景自动恢复对应 checkpoint。用户从导航栏新进入“匹配与面试”时仍保持
+干净状态，不会把旧排名当成新一轮结果展示。
 
 两阶段排序中的 `N` 是 HR 选择的最终返回人数。例如选择 Top 5 时，关键词规则先从
 全部已解析候选人中召回 `max(5 × 3, 15) = 15` 人；这 15 人全部经过 Evidence ReAct
@@ -252,7 +268,9 @@ HireFlowAgents/
 │   ├── services/             # 7 个服务 (含 matching 前置检查与索引自愈)
 │   ├── database/             # ORM + CRUD (7 表)
 │   └── utils/                # config + logger
-├── frontend/                 # Next.js (4 页面)
+├── frontend/                 # Next.js（Dashboard/岗位/简历/匹配/候选人面试工作台）
+│   ├── components/           # 公共组件 + InterviewWorkspace
+│   └── pages/interviews/     # /interviews/[jobId]/[candidateId] 动态路由
 ├── evaluation/               # Notebook + 评估脚本 + reports
 ├── tests/                    # 85 tests (Agent/HITL/SSE/异步并发/两阶段精排/安全/RAG/API/E2E)
 ├── data/                     # 测试数据
@@ -272,6 +290,7 @@ HireFlowAgents/
 - 邮件 `status="draft"`，审核只改状态，不发送
 - 不编造时间/地点/薪资/录用承诺
 - API Key 从 `.env` 读取，不硬编码
+- 当前 API 尚未实现登录、RBAC 和多租户隔离，只适合受控本地/内网演示；完成鉴权前不要直接暴露到公网
 
 ## 稳定性设计
 
@@ -288,6 +307,8 @@ HireFlowAgents/
 - 人工命名: 岗位和候选人都支持卡片内联改名，并同步结构化画像；重新解析不会覆盖人工岗位名。
 - 详情弹层: Agent 轨迹点击后在大弹窗展示；详细评分使用 React Portal 脱离页面动画定位上下文，打开时始终从弹窗顶部开始并只滚动弹窗内容。
 - 人审结果: 审核期间展示完整排名供 HR 比较；确认后只保留最终面试名单，其他候选人隐藏且无法进入面试流程。
+- 独立面试工作台: 名单卡片使用明确按钮进入候选人专属动态路由；问题、评价和邮件草稿并行加载，操作有防重复提交锁，详细评分在工作台弹窗中查看。
+- 返回上下文: 工作台返回链接携带本轮 job/thread；名单页只按显式参数恢复对应 checkpoint，普通导航进入不会自动显示旧结果。
 - 后台进度: `/workflow/run` 和 `/resume` 都先返回轻量任务信息，再通过 SSE 推送真实进度；事件支持回放、心跳和 Last-Event-ID 断线续传。
 - 历史任务: 选择岗位时不自动恢复旧结果，必须由用户明确选择恢复 checkpoint 或创建新 thread。
 
